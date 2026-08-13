@@ -1,0 +1,6 @@
+{
+  "name": "Murojaat va Tashkilotlar Boshqaruvi Tizimi",
+  "description": "Telegram Bot simulyatori, Tashkilotlar boshqaruvi va Bosh Kabinet analitik dashbordi tizimi",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
