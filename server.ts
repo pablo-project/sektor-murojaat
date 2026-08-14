@@ -1,8 +1,8 @@
 import express from 'express';
 import cors from 'cors';
+import path from 'path';
 import { GoogleGenAI } from '@google/genai';
 
-// CommonJS import sintaksisi - Render Node runtime'ida muammosiz ishlaydi
 const TelegramBot = require('node-telegram-bot-api');
 
 const app = express();
@@ -11,7 +11,9 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 3001;
 
-// Xotiradagi ma'lumotlar
+// FRONTEND FAYLLARINI TARQATISH (Cannot GET / muammosini hal qiladi)
+app.use(express.static(path.join(__dirname, '../dist')));
+
 let appeals: any[] = [];
 let organizations = [
   { id: '1', name: 'Toshkent Shahar Hokimligi', pendingCount: 0, completedCount: 0 },
@@ -48,7 +50,6 @@ if (botToken) {
         };
 
         appeals.push(newAppeal);
-        console.log('Yangi murojaat saqlandi:', newAppeal);
 
         bot.sendMessage(
           msg.chat.id,
@@ -88,6 +89,7 @@ if (botToken) {
   }
 }
 
+// REST API
 app.get('/api/appeals', (req, res) => {
   res.json(appeals);
 });
@@ -151,6 +153,11 @@ app.post('/api/ai/generate-response', async (req, res) => {
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// HAR QANDAY SO'ROVDA FRONTEND IShGA TUSHIShI UChUN
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, '../dist/index.html'));
 });
 
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
