@@ -254,49 +254,60 @@ if (telegramToken && telegramToken.trim().length > 10) {
         return;
       }
 
-      if (session.step === 'WAITING_CONTENT') {
-        const org = organizations.find((o) => o.id === session.orgId);
-        if (!org) {
-          telegramBot?.sendMessage(chatId, 'Xatolik yuz berdi. Iltimos, /start buyrug\'idan qayta boshlang.');
-          userSessions[chatId] = { step: 'NONE' };
-          return;
-        }
+    if (session.step === 'WAITING_CONTENT') {
+  // Debug qilish uchun console'ga chiqarib ko'ring:
+  console.log("Hozirgi sessiya:", session);
 
-        const newId = `app-${Date.now()}`;
-        const appealNum = `MUR-${new Date().getFullYear()}-${Math.floor(100 + Math.random() * 900)}`;
-        const now = new Date();
-        const deadline = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+  // Agar orgId sessiyada bo'lmasa, birinchi tashkilotni standart qilib olish (fallback)
+  const orgId = session.orgId || (organizations[0] ? organizations[0].id : null);
+  const org = organizations.find((o) => o.id === orgId);
 
-        const newAppeal: Appeal = {
-          id: newId,
-          appealNumber: appealNum,
-          organizationId: org.id,
-          organizationName: org.name,
-          fullName: session.fullName || msg.from?.first_name || 'Telegram Foydalanuvchisi',
-          phone: session.phone || '+998 Telegram',
-          address: session.address || 'Kiritilmagan',
-          content: text,
-          category: org.category,
-          createdAt: now.toISOString(),
-          deadlineAt: deadline.toISOString(),
-          status: 'yangi',
-          feedback: 'kutilmoqda',
-          telegramChatId: chatId,
-        };
+  if (!org) {
+    telegramBot?.sendMessage(chatId, 'Xatolik yuz berdi: Tashkilot topilmadi. Iltimos, /start buyrug\'idan qayta boshlang.');
+    userSessions[chatId] = { step: 'NONE' };
+    return;
+  }
 
-        appeals.unshift(newAppeal);
-        recalculateOrgStats();
+  const newId = `app-${Date.now()}`;
+  const appealNum = `MUR-${new Date().getFullYear()}-${Math.floor(100 + Math.random() * 900)}`;
+  const now = new Date();
+  const deadline = new Date(now.getTime() + 24 * 60 * 60 * 1000);
 
-        userSessions[chatId] = { step: 'NONE' };
+  const newAppeal: Appeal = {
+    id: newId,
+    appealNumber: appealNum,
+    organizationId: org.id,
+    organizationName: org.name,
+    fullName: session.fullName || msg.from?.first_name || 'Telegram Foydalanuvchisi',
+    phone: session.phone || '+998 Telegram',
+    address: session.address || 'Kiritilmagan',
+    content: text,
+    category: org.category || 'Umumiy',
+    createdAt: now.toISOString(),
+    deadlineAt: deadline.toISOString(),
+    status: 'yangi',
+    feedback: 'kutilmoqda',
+    telegramChatId: chatId,
+  };
 
-        telegramBot?.sendMessage(
-          chatId,
-          `✅ <b>Murojaatingiz tegishli tashkilotga yuborildi</b>\n\n📌 <b>Murojaat №:</b> <code>${appealNum}</code>\n🏢 <b>Tashkilot:</b> ${org.name}\n\nTashkilot mas'ul xodimi o'rganib chiqib, javob va bajarilgan ish fotosini ushbu botga yuboradi`,
-          { parse_mode: 'HTML' }
-        );
-        return;
-      }
+  // Massivga saqlash
+  appeals.unshift(newAppeal);
+  
+  // Terminal logida ko'rish
+  console.log("✅ Yangi murojaat bazaga saqlandi:", newAppeal.appealNumber);
 
+  recalculateOrgStats();
+
+  // Sessiyani tozalash
+  userSessions[chatId] = { step: 'NONE' };
+
+  telegramBot?.sendMessage(
+    chatId,
+    `✅ <b>Murojaatingiz tegishli tashkilotga yuborildi</b>\n\n📌 <b>Murojaat №:</b> <code>${appealNum}</code>\n🏢 <b>Tashkilot:</b> ${org.name}\n\nTashkilot mas'ul xodimi o'rganib chiqib, javob va bajarilgan ish fotosini ushbu botga yuboradi`,
+    { parse_mode: 'HTML' }
+  );
+  return;
+}
       if (session.step === 'WAITING_OBJECTION' && session.objectionAppealId) {
         const appeal = appeals.find((a) => a.id === session.objectionAppealId);
         if (appeal) {
