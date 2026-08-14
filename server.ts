@@ -22,6 +22,7 @@ const STORAGE_FILE = path.join(process.cwd(), 'data-storage.json');
 
 let organizations: Organization[] = [...INITIAL_ORGANIZATIONS];
 let appeals: Appeal[] = [...INITIAL_APPEALS];
+let savedTelegramToken: string | null = null;
 
 function loadPersistedData() {
   try {
@@ -38,6 +39,9 @@ function loadPersistedData() {
           ...INITIAL_ORGANIZATIONS.filter((o) => !existingIds.has(o.id)),
         ];
       }
+      if (parsed.savedTelegramToken) {
+        savedTelegramToken = parsed.savedTelegramToken;
+      }
     }
   } catch (err) {
     console.error('Failed to load persisted data:', err);
@@ -48,7 +52,7 @@ function savePersistedData() {
   try {
     fs.writeFileSync(
       STORAGE_FILE,
-      JSON.stringify({ appeals, organizations }, null, 2),
+      JSON.stringify({ appeals, organizations, savedTelegramToken }, null, 2),
       'utf-8'
     );
   } catch (err) {
@@ -75,7 +79,7 @@ function recalculateOrgStats() {
 
 recalculateOrgStats();
 
-let telegramToken: string | null = process.env.TELEGRAM_BOT_TOKEN || null;
+let telegramToken: string | null = process.env.TELEGRAM_BOT_TOKEN || savedTelegramToken || null;
 let telegramBot: TelegramBot | null = null;
 let botInfo: BotStatusInfo = { isActive: false };
 
@@ -116,6 +120,9 @@ async function initOrRestartTelegramBot(rawToken?: string | null) {
 
   try {
     telegramToken = validToken;
+    savedTelegramToken = validToken;
+    savePersistedData();
+
     telegramBot = new TelegramBot(validToken, { polling: true });
     const me = await telegramBot.getMe();
     botInfo = {
@@ -291,7 +298,7 @@ async function initOrRestartTelegramBot(rawToken?: string | null) {
       }
     });
 
-    // Xabarlarni qabul qilish va ketma-ketlik
+    // Xabarlarni qabul qilish
     telegramBot.on('message', async (msg) => {
       const chatId = msg.chat.id;
       const text = msg.text?.trim();
@@ -461,12 +468,12 @@ async function initOrRestartTelegramBot(rawToken?: string | null) {
     });
   } catch (err: any) {
     console.error('Telegram Botni boshlashda xatolik:', err.message);
+    throw err;
   }
 }
 
 initOrRestartTelegramBot(telegramToken);
 
-// Function to notify Telegram user when appeal is resolved
 async function notifyTelegramUserResolved(appeal: Appeal) {
   if (!telegramBot || !appeal.telegramChatId) return;
 
@@ -533,12 +540,12 @@ app.post('/api/telegram/configure', async (req, res) => {
   try {
     await initOrRestartTelegramBot(valid);
     if (botInfo.isActive) {
-      res.json({ success: true, bot: botInfo });
+      return res.json({ success: true, bot: botInfo });
     } else {
-      res.status(400).json({ success: false, error: 'Telegram botga ulanib bo‘lmadi. Tokenni tekshiring.' });
+      return res.status(400).json({ success: false, error: 'Telegram botga ulanib bo‘lmadi. Tokenni tekshiring.' });
     }
   } catch (err: any) {
-    res.status(500).json({ success: false, error: err.message || 'Botni ulashda xatolik' });
+    return res.status(400).json({ success: false, error: err.message || 'Botni ulashda xatolik' });
   }
 });
 
