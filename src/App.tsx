@@ -1,11 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import BoshKabinetDashboard, { Appeal } from './BoshKabinetDashboard';
+import BoshKabinetDashboard, { Appeal } from './components/BoshKabinetDashboard';
 
 export const App: React.FC = () => {
   const [appeals, setAppeals] = useState<Appeal[]>([]);
   const [userRole, setUserRole] = useState<'admin' | 'superadmin'>('admin');
 
-  // Render serveringizdan murojaatlarni yuklash
   const fetchAppeals = async () => {
     try {
       const res = await fetch('https://sektor-murojaat.onrender.com/api/appeals');
@@ -20,7 +19,6 @@ export const App: React.FC = () => {
 
   useEffect(() => {
     fetchAppeals();
-    // Real-time yangilash (Polling) - Har 5 soniyada
     const interval = setInterval(fetchAppeals, 5000);
     return () => clearInterval(interval);
   }, []);
