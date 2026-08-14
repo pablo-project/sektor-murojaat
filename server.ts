@@ -1,40 +1,35 @@
 import express from 'express';
 import cors from 'cors';
 import { GoogleGenAI } from '@google/genai';
-import TelegramBot from 'node-telegram-bot-api';
+import TelegramBot = require('node-telegram-bot-api');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Render dinamik porti
 const PORT = process.env.PORT || 3001;
 
-// Xotiradagi vaqtinchalik ma'lumotlar ombori
 let appeals: any[] = [];
 let organizations = [
   { id: '1', name: 'Toshkent Shahar Hokimligi', pendingCount: 0, completedCount: 0 },
   { id: '2', name: 'Sogʻliqni Saqlash Vazirligi', pendingCount: 0, completedCount: 0 }
 ];
 
-// Gemini AI sozlamalari
 const aiApiKey = process.env.GEMINI_API_KEY;
 let aiClient: GoogleGenAI | null = null;
 if (aiApiKey) {
   aiClient = new GoogleGenAI({ apiKey: aiApiKey });
 }
 
-// Telegram Bot sozlamalari
 const botToken = process.env.TELEGRAM_BOT_TOKEN;
-let bot: TelegramBot | null = null;
+let bot: any = null;
 
 if (botToken) {
   try {
     bot = new TelegramBot(botToken, { polling: true });
     console.log('Telegram Bot muvaffaqiyatli ishga tushdi!');
 
-    // Telegram'dan kelgan har bir yangi xabarni tutib olish va Dashbordga qo'shish
-    bot.on('message', (msg) => {
+    bot.on('message', (msg: any) => {
       if (msg.text && !msg.text.startsWith('/')) {
         const newAppeal = {
           id: Date.now().toString(),
@@ -42,30 +37,26 @@ if (botToken) {
           telegramChatId: msg.chat.id,
           text: msg.text,
           organizationId: '1',
-          status: 'NEW', // Dashbordda 'Yangi' bo'lib ko'rinadi
+          status: 'NEW',
           createdAt: new Date().toISOString(),
           aiResponse: ''
         };
 
-        // Murojaatni saqlaymiz
         appeals.push(newAppeal);
-        console.log('Yangi murojaat qabul qilindi:', newAppeal);
 
-        // Fuqaroga bildirishnoma yuborish
-        bot?.sendMessage(
+        bot.sendMessage(
           msg.chat.id,
           `✅ **Murojaatingiz qabul qilindi!**\n\n📌 **Murojaat ID:** #${newAppeal.id}\n📄 **Matn:** ${msg.text}\n\nTez orada mas'ul xodimlar ko'rib chiqadi.`
         );
       } else if (msg.text === '/start') {
-        bot?.sendMessage(
+        bot.sendMessage(
           msg.chat.id,
-          `Assalomu alaykum, ${msg.from?.first_name || 'fuqaro'}!\n\nMurojaatingizni matn ko'rinishida yuboring, u avtomatik ravishda boshqaruv paneliga (Dashbord) yo'naltiriladi.`
+          `Assalomu alaykum, ${msg.from?.first_name || 'fuqaro'}!\n\nMurojaatingizni yuboring, u avtomatik ravishda boshqaruv paneliga (Dashbord) yo'naltiriladi.`
         );
       }
     });
 
-    // Telegram inline tugmalarini qayta ishlash
-    bot.on('callback_query', (query) => {
+    bot.on('callback_query', (query: any) => {
       const chatId = query.message?.chat.id;
       const data = query.data;
 
@@ -74,14 +65,14 @@ if (botToken) {
         const appeal = appeals.find((a) => a.id === appealId);
         if (appeal) appeal.status = 'COMPLETED';
 
-        bot?.sendMessage(chatId!, '✅ Murojaat qoniqarli deb topildi va yopildi. Rahmat!');
+        bot.sendMessage(chatId, '✅ Murojaat qoniqarli deb topildi va yopildi. Rahmat!');
       } else if (data?.startsWith('reject_')) {
         const appealId = data.replace('reject_', '');
         const appeal = appeals.find((a) => a.id === appealId);
         if (appeal) appeal.status = 'ESCALATED';
 
-        bot?.sendMessage(
-          chatId!,
+        bot.sendMessage(
+          chatId,
           '🚨 Javobdan qoniqmaganingiz sababli murojaat Bosh Kabinet (Super Admin) nazoratiga o\'tkazildi.'
         );
       }
@@ -91,7 +82,6 @@ if (botToken) {
   }
 }
 
-// REST API Endpoints
 app.get('/api/appeals', (req, res) => {
   res.json(appeals);
 });
