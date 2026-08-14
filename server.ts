@@ -1,14 +1,15 @@
 import express from 'express';
-import cors from 'cors';
 import path from 'path';
+import fs from 'fs';
+import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
 import TelegramBot from 'node-telegram-bot-api';
 import { INITIAL_ORGANIZATIONS, INITIAL_APPEALS } from './src/data/initialData.js';
 import { Appeal, Organization, AppealStatus, FeedbackStatus, BotStatusInfo } from './src/types.js';
 
-
-const __dirname = process.cwd();
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // Initialize Gemini Client safely
 const apiKey = process.env.GEMINI_API_KEY;
@@ -25,16 +26,50 @@ if (apiKey) {
 }
 
 const app = express();
-
-app.use(cors({
-  origin: true,
-  credentials: false,
-}));
-
 app.use(express.json({ limit: '10mb' }));
-// In-Memory Data Store
+
+// Persistent Data Storage (JSON file on disk)
+const STORAGE_FILE = path.join(process.cwd(), 'data-storage.json');
+
 let organizations: Organization[] = [...INITIAL_ORGANIZATIONS];
 let appeals: Appeal[] = [...INITIAL_APPEALS];
+
+// Load persisted data if file exists
+function loadPersistedData() {
+  try {
+    if (fs.existsSync(STORAGE_FILE)) {
+      const raw = fs.readFileSync(STORAGE_FILE, 'utf-8');
+      const parsed = JSON.parse(raw);
+      if (parsed.appeals && Array.isArray(parsed.appeals)) {
+        appeals = parsed.appeals;
+      }
+      if (parsed.organizations && Array.isArray(parsed.organizations)) {
+        const existingIds = new Set(parsed.organizations.map((o: any) => o.id));
+        organizations = [
+          ...parsed.organizations,
+          ...INITIAL_ORGANIZATIONS.filter((o) => !existingIds.has(o.id)),
+        ];
+      }
+    }
+  } catch (err) {
+    console.error('Failed to load persisted data:', err);
+  }
+}
+
+// Save data to disk
+function savePersistedData() {
+  try {
+    fs.writeFileSync(
+      STORAGE_FILE,
+      JSON.stringify({ appeals, organizations }, null, 2),
+      'utf-8'
+    );
+  } catch (err) {
+    console.error('Failed to save persisted data:', err);
+  }
+}
+
+loadPersistedData();
 
 // Helper to recalculate organization statistics
 function recalculateOrgStats() {
@@ -49,6 +84,7 @@ function recalculateOrgStats() {
       rejectedAuthorityAppeals: orgAppeals.filter((a) => a.status === 'vakolatda_emas').length,
     };
   });
+  savePersistedData();
 }
 
 // Recalculate initial stats
@@ -56,7 +92,6 @@ recalculateOrgStats();
 
 // Telegram Bot Initialization
 const telegramToken = process.env.TELEGRAM_BOT_TOKEN;
-const telegramAdminChatId = process.env.TELEGRAM_ADMIN_CHAT_ID;
 let telegramBot: TelegramBot | null = null;
 let botInfo: BotStatusInfo = { isActive: false };
 
@@ -74,6 +109,10 @@ const userSessions: Record<number, UserTelegramSession> = {};
 if (telegramToken && telegramToken.trim().length > 10) {
   try {
     telegramBot = new TelegramBot(telegramToken.trim(), { polling: true });
+
+    telegramBot.on('polling_error', (error: any) => {
+      console.log('Telegram Polling Notice:', error.message || error);
+    });
 
     telegramBot.getMe().then((me) => {
       botInfo = {
@@ -212,28 +251,36 @@ if (telegramToken && telegramToken.trim().length > 10) {
       }
     });
 
-    // Handle Text Messages
-    telegramBot.on('message', (msg) => {
+    // Handle Messages (text, photo with caption, etc.)
+    telegramBot.on('message', async (msg) => {
       const chatId = msg.chat.id;
-      const text = msg.text?.trim();
+      const rawText = msg.text?.trim() || msg.caption?.trim() || '';
 
-      if (!text || text.startsWith('/')) return;
+      if (rawText.startsWith('/')) return;
 
       const session = userSessions[chatId] || { step: 'NONE' };
 
       if (session.step === 'WAITING_FULLNAME') {
-        session.fullName = text;
+        if (!rawText) {
+          telegramBot?.sendMessage(chatId, 'Iltimos, ism va familiyangizni matn ko\'rinishida yozib yuboring:');
+          return;
+        }
+        session.fullName = rawText;
         session.step = 'WAITING_PHONE';
         telegramBot?.sendMessage(
           chatId,
-          `Rahmat, <b>${text}</b>.\n\nEndi bog'lanish uchun <b>Telefon raqamingizni</b> kiriting (masalan: +998 90 123 45 67):`,
+          `Rahmat, <b>${rawText}</b>.\n\nEndi bog'lanish uchun <b>Telefon raqamingizni</b> kiriting (masalan: +998 90 123 45 67):`,
           { parse_mode: 'HTML' }
         );
         return;
       }
 
       if (session.step === 'WAITING_PHONE') {
-        session.phone = text;
+        if (!rawText && !msg.contact) {
+          telegramBot?.sendMessage(chatId, 'Iltimos, telefon raqamingizni kiriting:');
+          return;
+        }
+        session.phone = msg.contact ? msg.contact.phone_number : rawText;
         session.step = 'WAITING_ADDRESS';
         telegramBot?.sendMessage(
           chatId,
@@ -244,75 +291,81 @@ if (telegramToken && telegramToken.trim().length > 10) {
       }
 
       if (session.step === 'WAITING_ADDRESS') {
-        session.address = text;
+        if (!rawText) {
+          telegramBot?.sendMessage(chatId, 'Iltimos, yashash manzilingizni yozib yuboring:');
+          return;
+        }
+        session.address = rawText;
         session.step = 'WAITING_CONTENT';
         telegramBot?.sendMessage(
           chatId,
-          'Murojaatingiz <b>mazmunini (matnini)</b> batafsil yozib yuboring:',
+          'Murojaatingiz <b>mazmunini (matnini)</b> batafsil yozib yuboring (agar rasm bo\'lsa rasm bilan ham yuborishingiz mumkin):',
           { parse_mode: 'HTML' }
         );
         return;
       }
 
-    if (session.step === 'WAITING_CONTENT') {
-  // Debug qilish uchun console'ga chiqarib ko'ring:
-  console.log("Hozirgi sessiya:", session);
+      if (session.step === 'WAITING_CONTENT') {
+        const contentText = rawText || (msg.photo ? 'Foto-murojaat yuborildi' : 'Murojaat mazmuni');
+        const org = organizations.find((o) => o.id === session.orgId);
+        if (!org) {
+          telegramBot?.sendMessage(chatId, 'Xatolik yuz berdi. Iltimos, /start buyrug\'idan qayta boshlang.');
+          userSessions[chatId] = { step: 'NONE' };
+          return;
+        }
 
-  // Agar orgId sessiyada bo'lmasa, birinchi tashkilotni standart qilib olish (fallback)
-  const orgId = session.orgId || (organizations[0] ? organizations[0].id : null);
-  const org = organizations.find((o) => o.id === orgId);
+        let photoUrl: string | undefined = undefined;
+        if (msg.photo && msg.photo.length > 0) {
+          try {
+            const largestPhoto = msg.photo[msg.photo.length - 1];
+            const fileLink = await telegramBot?.getFileLink(largestPhoto.file_id);
+            photoUrl = fileLink;
+          } catch (e) {
+            console.error('Error fetching telegram photo link:', e);
+          }
+        }
 
-  if (!org) {
-    telegramBot?.sendMessage(chatId, 'Xatolik yuz berdi: Tashkilot topilmadi. Iltimos, /start buyrug\'idan qayta boshlang.');
-    userSessions[chatId] = { step: 'NONE' };
-    return;
-  }
+        const newId = `app-${Date.now()}`;
+        const appealNum = `MUR-${new Date().getFullYear()}-${Math.floor(100 + Math.random() * 900)}`;
+        const now = new Date();
+        const deadline = new Date(now.getTime() + 24 * 60 * 60 * 1000);
 
-  const newId = `app-${Date.now()}`;
-  const appealNum = `MUR-${new Date().getFullYear()}-${Math.floor(100 + Math.random() * 900)}`;
-  const now = new Date();
-  const deadline = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+        const newAppeal: Appeal = {
+          id: newId,
+          appealNumber: appealNum,
+          organizationId: org.id,
+          organizationName: org.name,
+          fullName: session.fullName || msg.from?.first_name || 'Telegram Foydalanuvchisi',
+          phone: session.phone || '+998 Telegram',
+          address: session.address || 'Kiritilmagan',
+          content: contentText,
+          attachmentUrl: photoUrl,
+          category: org.category,
+          createdAt: now.toISOString(),
+          deadlineAt: deadline.toISOString(),
+          status: 'yangi',
+          feedback: 'kutilmoqda',
+          telegramChatId: chatId,
+        };
 
-  const newAppeal: Appeal = {
-    id: newId,
-    appealNumber: appealNum,
-    organizationId: org.id,
-    organizationName: org.name,
-    fullName: session.fullName || msg.from?.first_name || 'Telegram Foydalanuvchisi',
-    phone: session.phone || '+998 Telegram',
-    address: session.address || 'Kiritilmagan',
-    content: text,
-    category: org.category || 'Umumiy',
-    createdAt: now.toISOString(),
-    deadlineAt: deadline.toISOString(),
-    status: 'yangi',
-    feedback: 'kutilmoqda',
-    telegramChatId: chatId,
-  };
+        appeals.unshift(newAppeal);
+        recalculateOrgStats();
 
-  // Massivga saqlash
-  appeals.unshift(newAppeal);
-  
-  // Terminal logida ko'rish
-  console.log("✅ Yangi murojaat bazaga saqlandi:", newAppeal.appealNumber);
+        userSessions[chatId] = { step: 'NONE' };
 
-  recalculateOrgStats();
+        telegramBot?.sendMessage(
+          chatId,
+          `✅ <b>Murojaatingiz tegishli tashkilotga yuborildi</b>\n\n📌 <b>Murojaat №:</b> <code>${appealNum}</code>\n🏢 <b>Tashkilot:</b> ${org.name}\n\nTashkilot mas'ul xodimi o'rganib chiqib, javob va bajarilgan ish fotosini ushbu botga yuboradi`,
+          { parse_mode: 'HTML' }
+        );
+        return;
+      }
 
-  // Sessiyani tozalash
-  userSessions[chatId] = { step: 'NONE' };
-
-  telegramBot?.sendMessage(
-    chatId,
-    `✅ <b>Murojaatingiz tegishli tashkilotga yuborildi</b>\n\n📌 <b>Murojaat №:</b> <code>${appealNum}</code>\n🏢 <b>Tashkilot:</b> ${org.name}\n\nTashkilot mas'ul xodimi o'rganib chiqib, javob va bajarilgan ish fotosini ushbu botga yuboradi`,
-    { parse_mode: 'HTML' }
-  );
-  return;
-}
       if (session.step === 'WAITING_OBJECTION' && session.objectionAppealId) {
         const appeal = appeals.find((a) => a.id === session.objectionAppealId);
         if (appeal) {
           appeal.feedback = 'etirozli';
-          appeal.objectionText = text;
+          appeal.objectionText = rawText || 'E\'tiroz bildirildi';
           appeal.objectionAt = new Date().toISOString();
           recalculateOrgStats();
 
@@ -667,8 +720,7 @@ Ushbu murojaat hal etilganligi bo'yicha rasmiy, xushmuomala, aniq va londa hulos
 
 // Start Express Server
 async function startServer() {
-  
-const PORT = Number(process.env.PORT) || 3000;
+  const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
