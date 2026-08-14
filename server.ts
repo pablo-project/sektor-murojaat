@@ -1,14 +1,13 @@
 import express from 'express';
 import path from 'path';
-import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
 import TelegramBot from 'node-telegram-bot-api';
 import { INITIAL_ORGANIZATIONS, INITIAL_APPEALS } from './src/data/initialData.js';
 import { Appeal, Organization, AppealStatus, FeedbackStatus, BotStatusInfo } from './src/types.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+
+const __dirname = process.cwd();
 
 // Initialize Gemini Client safely
 const apiKey = process.env.GEMINI_API_KEY;
