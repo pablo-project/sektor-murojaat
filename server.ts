@@ -3,8 +3,22 @@ import path from 'path';
 import fs from 'fs';
 import { GoogleGenAI } from '@google/genai';
 import TelegramBot from 'node-telegram-bot-api';
-import { Organization, Appeal } from './src/types.js';
 import { INITIAL_ORGANIZATIONS, INITIAL_APPEALS } from './src/data/initialData.js';
+import { Appeal, Organization, AppealStatus, FeedbackStatus, BotStatusInfo } from './src/types.js';
+
+// Initialize Gemini Client safely
+const apiKey = process.env.GEMINI_API_KEY;
+let aiClient: GoogleGenAI | null = null;
+if (apiKey) {
+  aiClient = new GoogleGenAI({
+    apiKey: apiKey,
+    httpOptions: {
+      headers: {
+        'User-Agent': 'aistudio-build',
+      },
+    },
+  });
+}
 
 const app = express();
 app.use(express.json({ limit: '10mb' }));
@@ -52,585 +66,391 @@ function savePersistedData() {
 
 loadPersistedData();
 
-// Gemini API instance
-const apiKey = process.env.GEMINI_API_KEY;
-const ai = apiKey ? new GoogleGenAI({ apiKey }) : null;
+// Helper to recalculate organization statistics
+function recalculateOrgStats() {
+  organizations = organizations.map((org) => {
+    const orgAppeals = appeals.filter((a) => a.organizationId === org.id);
+    return {
+      ...org,
+      totalAppeals: orgAppeals.length,
+      resolvedAppeals: orgAppeals.filter((a) => a.status === 'hal_etildi').length,
+      inProgressAppeals: orgAppeals.filter((a) => a.status === 'jarayonda' || a.status === 'yangi').length,
+      objectionAppeals: orgAppeals.filter((a) => a.feedback === 'etirozli').length,
+      rejectedAuthorityAppeals: orgAppeals.filter((a) => a.status === 'vakolatda_emas').length,
+    };
+  });
+  savePersistedData();
+}
 
-// Telegram Bot Instance
+// Recalculate initial stats
+recalculateOrgStats();
+
+// Telegram Bot Initialization
+const telegramToken = process.env.TELEGRAM_BOT_TOKEN;
 let telegramBot: TelegramBot | null = null;
-let botInfo: any = null;
-let botToken: string | null = process.env.TELEGRAM_BOT_TOKEN || null;
+let botInfo: BotStatusInfo = { isActive: false };
 
-// In-memory user state for Telegram bot conversational flow
-interface TelegramUserState {
-  step:
-    | 'IDLE'
-    | 'AWAITING_ORG'
-    | 'AWAITING_FULLNAME'
-    | 'AWAITING_PHONE'
-    | 'AWAITING_ADDRESS'
-    | 'AWAITING_CONTENT'
-    | 'AWAITING_OBJECTION';
-  selectedOrgId?: string;
-  selectedOrgName?: string;
+interface UserTelegramSession {
+  step: 'NONE' | 'SELECT_ORG' | 'WAITING_FULLNAME' | 'WAITING_PHONE' | 'WAITING_ADDRESS' | 'WAITING_CONTENT' | 'WAITING_OBJECTION';
+  orgId?: string;
+  orgName?: string;
   fullName?: string;
   phone?: string;
   address?: string;
-  content?: string;
-  photoUrl?: string;
-  targetAppealId?: string;
+  appealIdForObjection?: string;
 }
 
-const userStates = new Map<number, TelegramUserState>();
+const userSessions = new Map<number, UserTelegramSession>();
 
-async function initTelegramBot(tokenToUse?: string) {
-  const token = tokenToUse || botToken;
-  if (!token) {
-    console.log('Telegram Bot Token mavjud emas. Bot ishga tushirilmadi.');
-    return;
-  }
-
+if (telegramToken && telegramToken !== 'YOUR_TELEGRAM_BOT_TOKEN_HERE') {
   try {
-    if (telegramBot) {
-      try {
-        await telegramBot.stopPolling();
-      } catch (e) {
-        // ignore
-      }
-    }
+    telegramBot = new TelegramBot(telegramToken, { polling: true });
+    telegramBot
+      .getMe()
+      .then((me) => {
+        botInfo = {
+          isActive: true,
+          botUsername: me.username,
+          botFirstName: me.first_name,
+        };
+        console.log(`🤖 Telegram Bot faol: @${me.username}`);
+      })
+      .catch((err) => {
+        console.error('Telegram Bot getMe xatosi:', err.message);
+      });
 
-    telegramBot = new TelegramBot(token, { polling: true });
-    botToken = token;
-    botInfo = await telegramBot.getMe();
-    console.log(`Telegram Bot faollashtirildi: @${botInfo.username}`);
-
-    // Listen for polling errors to prevent crash
     telegramBot.on('polling_error', (error) => {
-      console.error('Telegram Polling Error:', error.message);
+      console.error('Telegram Polling xatosi:', error.message);
     });
 
-    // Command /start
-    telegramBot.onText(/\/start/, async (msg) => {
+    // 1. /start buyrug'i
+    telegramBot.onText(/\/start/, (msg) => {
       const chatId = msg.chat.id;
-      userStates.set(chatId, { step: 'IDLE' });
+      userSessions.set(chatId, { step: 'NONE' });
 
-      const keyboard = {
+      const welcomeText =
+        `Assalomu alaykum, <b>${msg.from?.first_name || 'Hurmatli fuqaro'}</b>!\n\n` +
+        `🏛 <b>Murojaatlar va Tashkilotlar Nazorati</b> rasmiy Telegram botiga xush kelibsiz.\n\n` +
+        `Ushbu bot orqali siz tuman/shahar tashkilotlariga to‘g‘ridan-to‘g‘ri murojaat yuborishingiz, ijro jarayonini kuzatishingiz va bajarilgan ishlarga baho berishingiz mumkin.`;
+
+      telegramBot?.sendMessage(chatId, welcomeText, {
+        parse_mode: 'HTML',
         reply_markup: {
           keyboard: [
             [{ text: '📝 Yangi murojaat yuborish' }],
             [{ text: '📋 Mening murojaatlarim holati' }],
-            [{ text: '🏢 Tashkilotlar ro‘yxati' }, { text: 'ℹ️ Yordam' }],
+            [{ text: '🏢 Tashkilotlar ro\'yxati' }, { text: 'ℹ️ Yordam' }],
           ],
           resize_keyboard: true,
         },
-      };
-
-      await telegramBot?.sendMessage(
-        chatId,
-        `Assalomu alaykum, ${msg.from?.first_name || 'Hurmatli fuqaro'}!\n\n` +
-          `🏛 **Sektor Murojaat va Nazorat Portalining** rasmiy Telegram botiga xush kelibsiz.\n\n` +
-          `Ushbu bot orqali tuman/shahar tashkilotlariga to‘g‘ridan-to‘g‘ri murojaat yuborishingiz va ularning ijro holatini kuzatib borishingiz mumkin.`,
-        { parse_mode: 'Markdown', ...keyboard }
-      );
+      });
     });
 
-    // Button: Yangi murojaat yuborish
-    telegramBot.onText(/📝 Yangi murojaat yuborish/, async (msg) => {
+    // 2. Yangi murojaat yuborish
+    telegramBot.onText(/📝 Yangi murojaat yuborish/, (msg) => {
       const chatId = msg.chat.id;
-      userStates.set(chatId, { step: 'AWAITING_ORG' });
+      userSessions.set(chatId, { step: 'SELECT_ORG' });
 
-      const inlineKeyboard = organizations.map((org) => [
+      const buttons = organizations.map((org) => [
         {
           text: org.name,
-          callback_data: `select_org_${org.id}`,
+          callback_data: `org_${org.id}`,
         },
       ]);
 
-      await telegramBot?.sendMessage(
+      telegramBot?.sendMessage(
         chatId,
-        `Qaysi tashkilotga murojaat yubormoqchisiz? Quyidagi ro'yxatdan tanlang:`,
+        `Qaysi tashkilotga murojaat yo‘llamoqchisiz? Ro‘yxatdan tanlang:`,
         {
           reply_markup: {
-            inline_keyboard: inlineKeyboard,
+            inline_keyboard: buttons,
           },
         }
       );
     });
 
-    // Button: Mening murojaatlarim
-    telegramBot.onText(/📋 Mening murojaatlarim holati/, async (msg) => {
+    // 3. Mening murojaatlarim
+    telegramBot.onText(/📋 Mening murojaatlarim holati/, (msg) => {
       const chatId = msg.chat.id;
       const userAppeals = appeals.filter((a) => a.telegramChatId === chatId);
 
       if (userAppeals.length === 0) {
-        await telegramBot?.sendMessage(
+        telegramBot?.sendMessage(
           chatId,
-          `Siz hali ushbu bot orqali murojaat yubormagansiz.\n"📝 Yangi murojaat yuborish" tugmasini bosib ariza qoldirishingiz mumkin.`
+          `Siz hali murojaat yubormagansiz. "📝 Yangi murojaat yuborish" tugmasi orqali ariza qoldirishingiz mumkin.`
         );
         return;
       }
 
-      let response = `📋 **Sizning barcha murojaatlaringiz (${userAppeals.length} ta):**\n\n`;
-      userAppeals.forEach((appItem, idx) => {
-        const statusBadge =
-          appItem.status === 'hal_etildi'
-            ? '✅ Hal etilgan'
-            : appItem.status === 'rad_etildi'
-            ? '❌ Rad etilgan'
-            : '⏳ Jarayonda';
+      let text = `📋 <b>Sizning murojaatlaringiz ro‘yxati (${userAppeals.length} ta):</b>\n\n`;
+      userAppeals.forEach((a, index) => {
+        let statusEmoji = '⏳ Jarayonda';
+        if (a.status === 'hal_etildi') statusEmoji = '✅ Hal etildi';
+        if (a.status === 'yangi') statusEmoji = '🆕 Yangi';
+        if (a.status === 'vakolatda_emas') statusEmoji = '⚠️ Boshqa tashkilotga yo\'naltirilgan';
 
-        response += `*${idx + 1}. № ${appItem.appealNumber}*\n`;
-        response += `🏢 Tashkilot: ${appItem.organizationName}\n`;
-        response += `📌 Holati: ${statusBadge}\n`;
-        if (appItem.status === 'hal_etildi' && appItem.resolutionText) {
-          response += `💬 Tashkilot javobi: ${appItem.resolutionText}\n`;
+        text += `${index + 1}. <b>№ ${a.appealNumber}</b>\n`;
+        text += `🏢 Tashkilot: ${a.organizationName}\n`;
+        text += `📌 Holati: ${statusEmoji}\n`;
+        if (a.resolutionText) {
+          text += `💬 Tashkilot javobi: <i>${a.resolutionText}</i>\n`;
         }
-        response += `📅 Sana: ${new Date(appItem.createdAt).toLocaleDateString('uz-UZ')}\n\n`;
+        text += `📅 Sana: ${new Date(a.createdAt).toLocaleDateString('uz-UZ')}\n\n`;
       });
 
-      await telegramBot?.sendMessage(chatId, response, { parse_mode: 'Markdown' });
+      telegramBot?.sendMessage(chatId, text, { parse_mode: 'HTML' });
     });
 
-    // Button: Tashkilotlar ro'yxati
-    telegramBot.onText(/🏢 Tashkilotlar ro‘yxati/, async (msg) => {
+    // 4. Tashkilotlar ro'yxati
+    telegramBot.onText(/🏢 Tashkilotlar ro'yxati/, (msg) => {
       const chatId = msg.chat.id;
-      let orgsList = `🏢 **Tumandagi mas'ul tashkilotlar ro'yxati:**\n\n`;
-      organizations.forEach((org, index) => {
-        orgsList += `${index + 1}. **${org.name}**\n`;
-        if (org.phone) orgsList += `   📞 Tel: ${org.phone}\n`;
-        if (org.leaderName) orgsList += `   👤 Rahbar: ${org.leaderName}\n`;
-        orgsList += `   📊 Jami murojaatlar: ${org.totalAppeals || 0} ta\n\n`;
+      let text = `🏢 <b>Tizimga ulangan tashkilotlar:</b>\n\n`;
+      organizations.forEach((o, i) => {
+        text += `${i + 1}. <b>${o.name}</b>\n📞 Tel: ${o.phone}\n👤 Rahbar: ${o.leader}\n\n`;
       });
-
-      await telegramBot?.sendMessage(chatId, orgsList, { parse_mode: 'Markdown' });
+      telegramBot?.sendMessage(chatId, text, { parse_mode: 'HTML' });
     });
 
-    // Button: Yordam
-    telegramBot.onText(/ℹ️ Yordam/, async (msg) => {
+    // 5. Yordam
+    telegramBot.onText(/ℹ️ Yordam/, (msg) => {
       const chatId = msg.chat.id;
-      await telegramBot?.sendMessage(
+      telegramBot?.sendMessage(
         chatId,
-        `💡 **Yordam va qo‘llanma:**\n\n` +
-          `1. "📝 Yangi murojaat yuborish" tugmasini bosing.\n` +
-          `2. Ro‘yxatdan muammo tegishli bo‘lgan tashkilotni tanlang.\n` +
-          `3. Ism-familiyangiz, telefon raqamingiz va manzilingizni kiriting.\n` +
-          `4. Murojaat matnini yozing (ixtiyoriy rasm bilan).\n` +
-          `5. Murojaatingiz darhol mas'ul tashkilot kabinetiga tushadi va ko'rib chiqiladi.`,
-        { parse_mode: 'Markdown' }
+        `ℹ️ <b>Yordam bo‘limi</b>\n\n` +
+          `1. "Yangi murojaat yuborish" tugmasini bosing.\n` +
+          `2. Kerakli tashkilotni tanlang.\n` +
+          `3. Ism-familiyangiz va telefoningizni yuboring.\n` +
+          `4. Murojaat mazmunini va fotosini yuboring.\n` +
+          `5. Murojaat hal etilgach sizga xabar va fotosurat yuboriladi.`,
+        { parse_mode: 'HTML' }
       );
     });
 
-    // Handle Callback queries
-    telegramBot.on('callback_query', async (callbackQuery) => {
-      const chatId = callbackQuery.message?.chat.id;
-      const data = callbackQuery.data;
+    // Inline button clicks
+    telegramBot.on('callback_query', async (query) => {
+      const chatId = query.message?.chat.id;
+      if (!chatId || !query.data) return;
 
-      if (!chatId || !data) return;
+      const session = userSessions.get(chatId) || { step: 'NONE' };
 
-      if (data.startsWith('select_org_')) {
-        const orgId = data.replace('select_org_', '');
-        const selectedOrg = organizations.find((o) => o.id === orgId);
+      // Organization selection
+      if (query.data.startsWith('org_')) {
+        const orgId = query.data.replace('org_', '');
+        const org = organizations.find((o) => o.id === orgId);
+        if (org) {
+          session.step = 'WAITING_FULLNAME';
+          session.orgId = org.id;
+          session.orgName = org.name;
+          userSessions.set(chatId, session);
 
-        if (selectedOrg) {
-          userStates.set(chatId, {
-            step: 'AWAITING_FULLNAME',
-            selectedOrgId: selectedOrg.id,
-            selectedOrgName: selectedOrg.name,
-          });
-
-          await telegramBot?.answerCallbackQuery(callbackQuery.id);
+          await telegramBot?.answerCallbackQuery(query.id);
           await telegramBot?.sendMessage(
             chatId,
-            `Tanlangan tashkilot: *${selectedOrg.name}*\n\n` +
-              `Iltimos, to‘liq **Familiyangiz, Ismingiz va Otangizning ismini** kiriting:`,
-            { parse_mode: 'Markdown' }
+            `🏢 Tanlangan tashkilot: <b>${org.name}</b>\n\n` +
+              `Iltimos, to‘liq <b>Familiyangiz, Ismingiz va Otangizning ismini</b> kiriting:`,
+            { parse_mode: 'HTML' }
           );
         }
-      } else if (data.startsWith('feedback_agree_')) {
-        const appealId = data.replace('feedback_agree_', '');
-        const target = appeals.find((a) => a.id === appealId);
-        if (target) {
-          target.feedback = 'roziman';
-          savePersistedData();
-          await telegramBot?.answerCallbackQuery(callbackQuery.id, {
-            text: 'Rahmat! Fikringiz qabul qilindi.',
-          });
+      }
+
+      // Citizen Feedback: "Roziman"
+      if (query.data.startsWith('feedback_agree_')) {
+        const appealId = query.data.replace('feedback_agree_', '');
+        const appeal = appeals.find((a) => a.id === appealId);
+        if (appeal) {
+          appeal.feedback = 'roziman';
+          recalculateOrgStats();
+          await telegramBot?.answerCallbackQuery(query.id, { text: 'Rahmat! Fikringiz qabul qilindi.' });
           await telegramBot?.sendMessage(
             chatId,
-            `✅ Sizning javobingiz qabul qilindi: **Roziman**. Baholaganingiz uchun tashakkur!`
+            `✅ Sizning javobingiz qabul qilindi: <b>Roziman (Ijobiy)</b>.\nBaholaganingiz uchun tashakkur!`,
+            { parse_mode: 'HTML' }
           );
         }
-      } else if (data.startsWith('feedback_object_')) {
-        const appealId = data.replace('feedback_object_', '');
-        const target = appeals.find((a) => a.id === appealId);
-        if (target) {
-          userStates.set(chatId, {
-            step: 'AWAITING_OBJECTION',
-            targetAppealId: appealId,
-          });
-          await telegramBot?.answerCallbackQuery(callbackQuery.id);
+      }
+
+      // Citizen Feedback: "E'tirozim bor"
+      if (query.data.startsWith('feedback_object_')) {
+        const appealId = query.data.replace('feedback_object_', '');
+        const appeal = appeals.find((a) => a.id === appealId);
+        if (appeal) {
+          session.step = 'WAITING_OBJECTION';
+          session.appealIdForObjection = appeal.id;
+          userSessions.set(chatId, session);
+
+          await telegramBot?.answerCallbackQuery(query.id);
           await telegramBot?.sendMessage(
             chatId,
-            `🔴 E'tirozingiz sababini yozib yuboring:\n(Masalan: muammo to'liq hal etilmadi, ish oxiriga yetkazilmadi va h.k.)`
+            `🔴 Iltimos, nima sababdan rozi emasligingizni (e'tirozingiz sababini) yozib yuboring:`,
+            { parse_mode: 'HTML' }
           );
         }
       }
     });
 
-    // Text & Message handler (Step-by-step state machine)
+    // Step by step message collection
     telegramBot.on('message', async (msg) => {
       const chatId = msg.chat.id;
       const text = msg.text?.trim();
-      const state = userStates.get(chatId);
+      const session = userSessions.get(chatId);
 
-      if (!state || state.step === 'IDLE' || text?.startsWith('/')) {
-        return;
-      }
+      if (!session || session.step === 'NONE' || text?.startsWith('/')) return;
+      if (text === '📝 Yangi murojaat yuborish' || text === '📋 Mening murojaatlarim holati' || text === '🏢 Tashkilotlar ro\'yxati' || text === 'ℹ️ Yordam') return;
 
-      // Ignore main menu buttons triggered by mistake in steps
-      if (text === '📝 Yangi murojaat yuborish' || text === '📋 Mening murojaatlarim holati' || text === '🏢 Tashkilotlar ro‘yxati' || text === 'ℹ️ Yordam') {
-        return;
-      }
-
-      if (state.step === 'AWAITING_FULLNAME' && text) {
-        state.fullName = text;
-        state.step = 'AWAITING_PHONE';
-        userStates.set(chatId, state);
+      // Full Name
+      if (session.step === 'WAITING_FULLNAME' && text) {
+        session.fullName = text;
+        session.step = 'WAITING_PHONE';
+        userSessions.set(chatId, session);
 
         await telegramBot?.sendMessage(
           chatId,
-          `Rahmat, ${text}!\n\nBog‘lanish uchun **telefon raqamingizni** kiriting (masalan: +998901234567) yoki quyidagi tugma orqali yuboring:`,
+          `Rahmat, <b>${text}</b>!\n\nBog‘lanish uchun telefon raqamingizni yuboring (masalan: +998901234567) yoki quyidagi tugmani bosing:`,
           {
+            parse_mode: 'HTML',
             reply_markup: {
               keyboard: [
-                [{ text: '📱 Telefon raqamni yuborish', request_contact: true }],
-                [{ text: 'Bekor qilish' }],
+                [{ text: '📱 Raqamimni yuborish', request_contact: true }],
+                [{ text: '❌ Bekor qilish' }],
               ],
               resize_keyboard: true,
               one_time_keyboard: true,
             },
           }
         );
-      } else if (state.step === 'AWAITING_PHONE') {
-        let phoneNum = msg.contact?.phone_number || text;
-        if (text === 'Bekor qilish') {
-          userStates.set(chatId, { step: 'IDLE' });
-          await telegramBot?.sendMessage(chatId, 'Murojaat bekor qilindi.', {
-            reply_markup: {
-              keyboard: [
-                [{ text: '📝 Yangi murojaat yuborish' }],
-                [{ text: '📋 Mening murojaatlarim holati' }],
-                [{ text: '🏢 Tashkilotlar ro‘yxati' }, { text: 'ℹ️ Yordam' }],
-              ],
-              resize_keyboard: true,
-            },
-          });
+        return;
+      }
+
+      // Phone
+      if (session.step === 'WAITING_PHONE') {
+        let phoneStr = msg.contact?.phone_number || text;
+        if (text === '❌ Bekor qilish') {
+          userSessions.set(chatId, { step: 'NONE' });
+          await telegramBot?.sendMessage(chatId, 'Murojaat bekor qilindi.');
           return;
         }
 
-        if (phoneNum) {
-          if (!phoneNum.startsWith('+') && !phoneNum.startsWith('998')) {
-            phoneNum = `+998${phoneNum}`;
-          }
-          state.phone = phoneNum;
-          state.step = 'AWAITING_ADDRESS';
-          userStates.set(chatId, state);
+        if (phoneStr) {
+          if (!phoneStr.startsWith('+')) phoneStr = `+${phoneStr}`;
+          session.phone = phoneStr;
+          session.step = 'WAITING_CONTENT';
+          userSessions.set(chatId, session);
 
           await telegramBot?.sendMessage(
             chatId,
-            `Yashash **manzilingizni** kiriting (tuman, MFY, ko'cha, uy raqami):`,
+            `Endi murojaatingizning <b>batafsil mazmunini</b> yozing (agar kerak bo‘lsa fotosurat bilan birga yuboring):`,
             {
+              parse_mode: 'HTML',
               reply_markup: {
-                keyboard: [[{ text: 'Bekor qilish' }]],
+                keyboard: [[{ text: '❌ Bekor qilish' }]],
                 resize_keyboard: true,
               },
             }
           );
         }
-      } else if (state.step === 'AWAITING_ADDRESS' && text) {
-        if (text === 'Bekor qilish') {
-          userStates.set(chatId, { step: 'IDLE' });
+        return;
+      }
+
+      // Content & Photo
+      if (session.step === 'WAITING_CONTENT') {
+        if (text === '❌ Bekor qilish') {
+          userSessions.set(chatId, { step: 'NONE' });
           await telegramBot?.sendMessage(chatId, 'Murojaat bekor qilindi.');
           return;
         }
 
-        state.address = text;
-        state.step = 'AWAITING_CONTENT';
-        userStates.set(chatId, state);
+        const appealContent = text || msg.caption || '(Faqat fotosurat ilova qilindi)';
+        let photoLink: string | undefined = undefined;
+
+        if (msg.photo && msg.photo.length > 0) {
+          const highestResPhoto = msg.photo[msg.photo.length - 1];
+          try {
+            photoLink = await telegramBot?.getFileLink(highestResPhoto.file_id);
+          } catch (err) {
+            console.error('Photo link olishda xato:', err);
+          }
+        }
+
+        const newId = `app-${Date.now()}`;
+        const appealNum = `MUR-${new Date().getFullYear()}-${Math.floor(100 + Math.random() * 900)}`;
+
+        const newAppeal: Appeal = {
+          id: newId,
+          appealNumber: appealNum,
+          organizationId: session.orgId || 'org-1',
+          organizationName: session.orgName || 'Tashkilot',
+          fullName: session.fullName || 'Fuqaro',
+          phone: session.phone || '+998 90 000-00-00',
+          content: appealContent,
+          attachmentUrl: photoLink,
+          category: organizations.find((o) => o.id === session.orgId)?.category || 'Umumiy',
+          createdAt: new Date().toISOString(),
+          status: 'yangi',
+          feedback: 'kutilmoqda',
+          telegramChatId: chatId,
+        };
+
+        appeals.unshift(newAppeal);
+        recalculateOrgStats();
+        userSessions.set(chatId, { step: 'NONE' });
 
         await telegramBot?.sendMessage(
           chatId,
-          `Endi murojaatingizning **batafsil mazmunini** yozing (agar kerak bo'lsa rasm bilan birga yuborishingiz mumkin):`,
+          `✅ <b>Murojaatingiz qabul qilindi!</b>\n\n` +
+            `📄 <b>Raqami:</b> <code>${appealNum}</code>\n` +
+            `🏢 <b>Mas'ul tashkilot:</b> ${session.orgName}\n` +
+            `⏱️ <b>Muddati:</b> 24 soat\n\n` +
+            `Murojaat ijrosi bo‘yicha natija va fotosurat ushbu bot orqali sizga yuboriladi.`,
           {
+            parse_mode: 'HTML',
             reply_markup: {
-              keyboard: [[{ text: 'Bekor qilish' }]],
+              keyboard: [
+                [{ text: '📝 Yangi murojaat yuborish' }],
+                [{ text: '📋 Mening murojaatlarim holati' }],
+                [{ text: '🏢 Tashkilotlar ro\'yxati' }, { text: 'ℹ️ Yordam' }],
+              ],
               resize_keyboard: true,
             },
           }
         );
-      } else if (state.step === 'AWAITING_CONTENT') {
-        if (text === 'Bekor qilish') {
-          userStates.set(chatId, { step: 'IDLE' });
-          await telegramBot?.sendMessage(chatId, 'Murojaat bekor qilindi.');
-          return;
-        }
+        return;
+      }
 
-        const contentText = text || msg.caption || '(Faqat rasm yoki fayl ilova qilindi)';
-        let photoUrl: string | undefined = undefined;
-
-        if (msg.photo && msg.photo.length > 0) {
-          const largestPhoto = msg.photo[msg.photo.length - 1];
-          try {
-            const fileLink = await telegramBot?.getFileLink(largestPhoto.file_id);
-            photoUrl = fileLink;
-          } catch (e) {
-            console.error('Failed to get photo link:', e);
-          }
-        }
-
-        const appealNum = `MUR-${new Date().getFullYear()}-${String(appeals.length + 1).padStart(3, '0')}`;
-        const selectedOrg = organizations.find((o) => o.id === state.selectedOrgId);
-
-        const now = new Date();
-        const deadline = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
-
-        const newAppeal: Appeal = {
-          id: `appeal-${Date.now()}`,
-          appealNumber: appealNum,
-          organizationId: state.selectedOrgId || 'org-1',
-          organizationName: state.selectedOrgName || 'Tashkilot',
-          fullName: state.fullName || 'Fuqaro',
-          phone: state.phone || '',
-          address: state.address || '',
-          content: contentText,
-          category: selectedOrg?.category || 'Umumiy',
-          createdAt: now.toISOString(),
-          deadlineAt: deadline.toISOString(),
-          status: 'jarayonda',
-          feedback: 'kutilmoqda',
-          telegramChatId: chatId,
-          attachmentUrl: photoUrl,
-        };
-
-        appeals.unshift(newAppeal);
-
-        // Update org stats
-        if (selectedOrg) {
-          selectedOrg.totalAppeals = (selectedOrg.totalAppeals || 0) + 1;
-          selectedOrg.inProgressAppeals = (selectedOrg.inProgressAppeals || 0) + 1;
-        }
-
-        savePersistedData();
-        userStates.set(chatId, { step: 'IDLE' });
-
-        const finalKeyboard = {
-          reply_markup: {
-            keyboard: [
-              [{ text: '📝 Yangi murojaat yuborish' }],
-              [{ text: '📋 Mening murojaatlarim holati' }],
-              [{ text: '🏢 Tashkilotlar ro‘yxati' }, { text: 'ℹ️ Yordam' }],
-            ],
-            resize_keyboard: true,
-          },
-        };
-
-        await telegramBot?.sendMessage(
-          chatId,
-          `✅ **Murojaatingiz muvaffaqiyatli qabul qilindi!**\n\n` +
-            `📄 **Raqami:** \`${appealNum}\`\n` +
-            `🏢 **Mas'ul tashkilot:** ${state.selectedOrgName}\n` +
-            `⏳ **Ijro muddati:** 7 kun (${deadline.toLocaleDateString('uz-UZ')} gacha)\n\n` +
-            `Murojaatingiz ijro holati o‘zgarganda sizga ushbu bot orqali xabar beriladi.`,
-          { parse_mode: 'Markdown', ...finalKeyboard }
-        );
-      } else if (state.step === 'AWAITING_OBJECTION' && text && state.targetAppealId) {
-        const target = appeals.find((a) => a.id === state.targetAppealId);
-        if (target) {
-          target.feedback = 'e`tiroz';
-          target.objectionReason = text;
-          target.status = 'jarayonda'; // Re-open if citizen objected
-          savePersistedData();
+      // Objection reason
+      if (session.step === 'WAITING_OBJECTION' && text && session.appealIdForObjection) {
+        const appeal = appeals.find((a) => a.id === session.appealIdForObjection);
+        if (appeal) {
+          appeal.feedback = 'etirozli';
+          appeal.objectionText = text;
+          appeal.objectionAt = new Date().toISOString();
+          appeal.status = 'jarayonda'; // Reopen appeal
+          recalculateOrgStats();
 
           await telegramBot?.sendMessage(
             chatId,
-            `⚠️ E'tirozingiz qabul qilindi! Murojaat qayta ko'rib chiqish uchun mas'ul tashkilotga yo'naltirildi.`
+            `⚠️ E'tirozingiz qabul qilindi! Murojaat Bosh Kabinet va tashkilotga qayta ijro uchun yuborildi.`
           );
         }
-        userStates.set(chatId, { step: 'IDLE' });
+        userSessions.set(chatId, { step: 'NONE' });
       }
     });
-  } catch (error) {
-    console.error('Telegram Bot init error:', error);
+  } catch (err: any) {
+    console.error('Telegram Botni boshlashda xatolik:', err.message);
   }
 }
 
-initTelegramBot();
-
-// API Routes
-
-// GET Organizations
-app.get('/api/organizations', (req, res) => {
-  res.json(organizations);
-});
-
-// POST New Organization
-app.post('/api/organizations', (req, res) => {
-  const { name, shortName, category, phone, email, address, leaderName, password } = req.body;
-  const newOrg: Organization = {
-    id: `org-${Date.now()}`,
-    name,
-    shortName: shortName || name,
-    category,
-    phone: phone || '',
-    email: email || '',
-    address: address || '',
-    leaderName: leaderName || '',
-    password: password || '123456',
-    totalAppeals: 0,
-    completedAppeals: 0,
-    inProgressAppeals: 0,
-    expiredAppeals: 0,
-    rejectedAuthorityAppeals: 0,
-  };
-  organizations.push(newOrg);
-  savePersistedData();
-  res.status(201).json(newOrg);
-});
-
-// PUT Update Organization
-app.put('/api/organizations/:id', (req, res) => {
-  const { id } = req.params;
-  const index = organizations.findIndex((o) => o.id === id);
-  if (index !== -1) {
-    organizations[index] = { ...organizations[index], ...req.body };
-    savePersistedData();
-    res.json(organizations[index]);
-  } else {
-    res.status(404).json({ error: 'Tashkilot topilmadi' });
-  }
-});
-
-// DELETE Organization
-app.delete('/api/organizations/:id', (req, res) => {
-  const { id } = req.params;
-  organizations = organizations.filter((o) => o.id !== id);
-  appeals = appeals.filter((a) => a.organizationId !== id);
-  savePersistedData();
-  res.json({ success: true });
-});
-
-// GET Appeals
-app.get('/api/appeals', (req, res) => {
-  res.json(appeals);
-});
-
-// POST New Appeal
-app.post('/api/appeals', (req, res) => {
-  const {
-    organizationId,
-    organizationName,
-    fullName,
-    phone,
-    address,
-    content,
-    category,
-    days = 7,
-    attachmentUrl,
-  } = req.body;
-
-  const now = new Date();
-  const deadline = new Date(now.getTime() + days * 24 * 60 * 60 * 1000);
-  const appealNum = `MUR-${now.getFullYear()}-${String(appeals.length + 1).padStart(3, '0')}`;
-
-  const newAppeal: Appeal = {
-    id: `appeal-${Date.now()}`,
-    appealNumber: appealNum,
-    organizationId,
-    organizationName,
-    fullName,
-    phone,
-    address,
-    content,
-    category: category || 'Umumiy',
-    createdAt: now.toISOString(),
-    deadlineAt: deadline.toISOString(),
-    status: 'jarayonda',
-    feedback: 'kutilmoqda',
-    attachmentUrl,
-  };
-
-  appeals.unshift(newAppeal);
-
-  // Update org stats
-  const org = organizations.find((o) => o.id === organizationId);
-  if (org) {
-    org.totalAppeals = (org.totalAppeals || 0) + 1;
-    org.inProgressAppeals = (org.inProgressAppeals || 0) + 1;
-  }
-
-  savePersistedData();
-  res.status(201).json(newAppeal);
-});
-
-// PUT Update Appeal Status / Resolution
-app.put('/api/appeals/:id', async (req, res) => {
-  const { id } = req.params;
-  const appeal = appeals.find((a) => a.id === id);
-
-  if (!appeal) {
-    return res.status(404).json({ error: 'Murojaat topilmadi' });
-  }
-
-  const {
-    status,
-    resolutionText,
-    resolutionPhotoUrl,
-    assignedOperator,
-    startedAt,
-    resolvedAt,
-    rejectedAuthorityReason,
-    feedback,
-    attachmentUrl,
-  } = req.body;
-
-  const oldStatus = appeal.status;
-
-  if (status !== undefined) appeal.status = status;
-  if (resolutionText !== undefined) appeal.resolutionText = resolutionText;
-  if (resolutionPhotoUrl !== undefined) appeal.resolutionPhotoUrl = resolutionPhotoUrl;
-  if (assignedOperator !== undefined) appeal.assignedOperator = assignedOperator;
-  if (startedAt !== undefined) appeal.startedAt = startedAt;
-  if (resolvedAt !== undefined) appeal.resolvedAt = resolvedAt;
-  if (rejectedAuthorityReason !== undefined) appeal.rejectedAuthorityReason = rejectedAuthorityReason;
-  if (feedback !== undefined) appeal.feedback = feedback;
-  if (attachmentUrl !== undefined) appeal.attachmentUrl = attachmentUrl;
-
-  savePersistedData();
-
-  // If status changed to 'hal_etildi' and telegramChatId exists, send notification to citizen
-  if (status === 'hal_etildi' && oldStatus !== 'hal_etildi' && appeal.telegramChatId) {
-    try {
-      await sendAppealResolvedNotification(appeal);
-    } catch (e) {
-      console.error('Notification error:', e);
-    }
-  }
-
-  res.json(appeal);
-});
-
-// Notification Helper to Citizen via Telegram
-async function sendAppealResolvedNotification(appeal: Appeal) {
+// Function to notify Telegram user when appeal is resolved
+async function notifyTelegramUserResolved(appeal: Appeal) {
   if (!telegramBot || !appeal.telegramChatId) return;
 
-  const message =
-    `🎉 **Murojaatingiz ko'rib chiqildi va hal etildi!**\n\n` +
-    `📄 **Murojaat raqami:** \`${appeal.appealNumber}\`\n` +
-    `🏢 **Tashkilot:** ${appeal.organizationName}\n` +
-    `💬 **Bajarilgan ish / Hulosa:** ${appeal.resolutionText || 'Masala yuzasidan amaliy choralar ko‘rildi.'}\n\n` +
+  const text =
+    `🎉 <b>Murojaatingiz ko‘rib chiqildi va hal etildi!</b>\n\n` +
+    `📄 <b>Murojaat №:</b> <code>${appeal.appealNumber}</code>\n` +
+    `🏢 <b>Tashkilot:</b> ${appeal.organizationName}\n` +
+    `💬 <b>Bajarilgan ish / Xulosa:</b>\n<i>${appeal.resolutionText}</i>\n\n` +
     `Iltimos, tashkilot tomonidan bajarilgan ish sifatini baholang:`;
 
-  const feedbackKeyboard = {
+  const inlineKeyboard = {
     inline_keyboard: [
       [
         { text: '👍 Roziman (Ijobiy)', callback_data: `feedback_agree_${appeal.id}` },
@@ -639,95 +459,228 @@ async function sendAppealResolvedNotification(appeal: Appeal) {
     ],
   };
 
-  if (appeal.resolutionPhotoUrl) {
-    try {
+  try {
+    if (appeal.resolutionPhotoUrl) {
       await telegramBot.sendPhoto(appeal.telegramChatId, appeal.resolutionPhotoUrl, {
-        caption: message,
-        parse_mode: 'Markdown',
-        reply_markup: feedbackKeyboard,
+        caption: text,
+        parse_mode: 'HTML',
+        reply_markup: inlineKeyboard,
       });
-      return;
-    } catch (err) {
-      // fallback to text if photo send fails
+    } else {
+      await telegramBot.sendMessage(appeal.telegramChatId, text, {
+        parse_mode: 'HTML',
+        reply_markup: inlineKeyboard,
+      });
     }
-  }
-
-  await telegramBot.sendMessage(appeal.telegramChatId, message, {
-    parse_mode: 'Markdown',
-    reply_markup: feedbackKeyboard,
-  });
-}
-
-// Generic Telegram Notification endpoint
-async function sendAppealUpdateNotification(appealId: string, customMessage: string) {
-  const appeal = appeals.find((a) => a.id === appealId);
-  if (!appeal || !appeal.telegramChatId || !telegramBot) return false;
-
-  try {
-    await telegramBot.sendMessage(
-      appeal.telegramChatId,
-      `🔔 **Murojaatingiz bo'yicha yangi xabar:**\n\n` +
-        `📄 Murojaat №: \`${appeal.appealNumber}\`\n\n` +
-        `${customMessage}`,
-      { parse_mode: 'Markdown' }
-    );
-    return true;
-  } catch (e) {
-    console.error('Failed to send telegram update:', e);
-    return false;
-  }
-}
-
-// POST Configure Telegram Bot
-app.post('/api/telegram/configure', async (req, res) => {
-  const { token } = req.body;
-  if (!token) {
-    return res.status(400).json({ error: 'Token kiritilmadi' });
-  }
-
-  try {
-    await initTelegramBot(token);
-    res.json({
-      success: true,
-      bot: botInfo,
-      message: `Bot muvaffaqiyatli ulandi: @${botInfo?.username}`,
-    });
   } catch (err: any) {
-    res.status(500).json({ error: err.message || 'Botni faollashtirishda xatolik' });
+    console.error('Telegram notification yuborishda xato:', err.message);
+  }
+}
+
+// REST API Endpoints
+
+// 0. Auth Login
+app.post('/api/auth/login', (req, res) => {
+  const { password } = req.body;
+  if (!password) {
+    return res.status(400).json({ success: false, message: 'Parol kiritilmadi' });
+  }
+
+  // Super Admin / Bosh Kabinet passwords
+  if (password === 'admin123' || password === 'admin2026' || password === 'pablo2026') {
+    return res.json({ success: true, role: 'bosh_kabinet' });
+  }
+
+  // Organization custom passwords
+  const org = organizations.find((o) => o.password === password);
+  if (org) {
+    return res.json({ success: true, role: 'tashkilot', organization: org });
+  }
+
+  return res.status(401).json({ success: false, message: 'Kiritilgan maxsus parol noto‘g‘ri!' });
+});
+
+// 1. Get all organizations
+app.get('/api/organizations', (req, res) => {
+  recalculateOrgStats();
+  res.json(organizations);
+});
+
+// 2. Add organization
+app.post('/api/organizations', (req, res) => {
+  const { name, code, category, phone, leader, password } = req.body;
+  if (!name || !code) {
+    return res.status(400).json({ error: 'Tashkilot nomi va kodi kiritilishi shart' });
+  }
+
+  const newOrg: Organization = {
+    id: `org-${Date.now()}`,
+    name,
+    code,
+    category: category || 'Davlat Tashkiloti',
+    phone: phone || '+998 71 200-00-00',
+    leader: leader || 'Mas\'ul Xodim',
+    password: password || `${code.toLowerCase().replace(/[^a-z0-9]/g, '')}123`,
+    totalAppeals: 0,
+    resolvedAppeals: 0,
+    inProgressAppeals: 0,
+    objectionAppeals: 0,
+    rejectedAuthorityAppeals: 0,
+  };
+
+  organizations.push(newOrg);
+  recalculateOrgStats();
+  res.status(201).json(newOrg);
+});
+
+// 3. Get appeals
+app.get('/api/appeals', (req, res) => {
+  const { organizationId, status, feedback, search } = req.query;
+  let filtered = [...appeals];
+
+  if (organizationId) {
+    filtered = filtered.filter((a) => a.organizationId === organizationId);
+  }
+  if (status) {
+    filtered = filtered.filter((a) => a.status === status);
+  }
+  if (feedback) {
+    filtered = filtered.filter((a) => a.feedback === feedback);
+  }
+  if (search && typeof search === 'string') {
+    const q = search.toLowerCase();
+    filtered = filtered.filter(
+      (a) =>
+        a.fullName.toLowerCase().includes(q) ||
+        a.appealNumber.toLowerCase().includes(q) ||
+        a.phone.includes(q) ||
+        a.content.toLowerCase().includes(q)
+    );
+  }
+
+  filtered.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  res.json(filtered);
+});
+
+// 4. Accept appeal
+app.patch('/api/appeals/:id/accept', (req, res) => {
+  const { id } = req.params;
+  const { operatorName } = req.body;
+
+  const appeal = appeals.find((a) => a.id === id);
+  if (!appeal) {
+    return res.status(404).json({ error: 'Murojaat topilmadi' });
+  }
+
+  appeal.status = 'jarayonda';
+  appeal.assignedOperator = operatorName || 'Mas\'ul mutaxassis';
+  appeal.startedAt = new Date().toISOString();
+
+  recalculateOrgStats();
+  res.json(appeal);
+});
+
+// 5. Reject authority
+app.patch('/api/appeals/:id/reject-authority', (req, res) => {
+  const { id } = req.params;
+  const { reason } = req.body;
+
+  const appeal = appeals.find((a) => a.id === id);
+  if (!appeal) {
+    return res.status(404).json({ error: 'Murojaat topilmadi' });
+  }
+
+  appeal.status = 'vakolatda_emas';
+  appeal.resolutionText = reason || 'Ushbu murojaat tashkilot vakolatiga kirmaydi va Bosh Kabinetga yo\'naltirildi.';
+  
+  recalculateOrgStats();
+  res.json(appeal);
+});
+
+// 6. Resolve appeal
+app.patch('/api/appeals/:id/resolve', async (req, res) => {
+  const { id } = req.params;
+  const { resolutionText, resolutionPhotoUrl } = req.body;
+
+  if (!resolutionText) {
+    return res.status(400).json({ error: 'Hulosa matni kiritilishi shart' });
+  }
+
+  const appeal = appeals.find((a) => a.id === id);
+  if (!appeal) {
+    return res.status(404).json({ error: 'Murojaat topilmadi' });
+  }
+
+  appeal.status = 'hal_etildi';
+  appeal.resolutionText = resolutionText;
+  appeal.resolutionPhotoUrl = resolutionPhotoUrl || 'https://images.unsplash.com/photo-1450133064473-71024230f91b?auto=format&fit=crop&w=600&q=80';
+  appeal.resolvedAt = new Date().toISOString();
+  appeal.feedback = 'kutilmoqda';
+
+  recalculateOrgStats();
+  await notifyTelegramUserResolved(appeal);
+
+  res.json(appeal);
+});
+
+// 7. Feedback
+app.patch('/api/appeals/:id/feedback', (req, res) => {
+  const { id } = req.params;
+  const { feedback, objectionText } = req.body;
+
+  const appeal = appeals.find((a) => a.id === id);
+  if (!appeal) {
+    return res.status(404).json({ error: 'Murojaat topilmadi' });
+  }
+
+  appeal.feedback = feedback as FeedbackStatus;
+  if (feedback === 'etirozli') {
+    appeal.objectionText = objectionText || 'Foydalanuvchi hal etilgan natijadan qoniqmadi.';
+    appeal.objectionAt = new Date().toISOString();
+  }
+
+  recalculateOrgStats();
+  res.json(appeal);
+});
+
+// 8. Gemini AI Response
+app.post('/api/gemini/suggest-response', async (req, res) => {
+  const { appealContent, organizationName } = req.body;
+
+  if (!aiClient) {
+    return res.json({
+      suggestedResponse: `Hurmatli fuqaro, sizning "${organizationName}"ga yo'llagan murojaatingiz mutaxassislar tomonidan atroflicha ko'rib chiqildi hamda belgilangan tartibda ijobiy hal etildi.`,
+    });
+  }
+
+  try {
+    const prompt = `Siz Uzbekistan davlat tashkilotining rasmiy mas'ul xodimisiz. 
+Foydalanuvchi murojaati: "${appealContent}"
+Tashkilot nomi: "${organizationName}"
+
+Ushbu murojaat hal etilganligi bo'yicha rasmiy, xushmuomala, aniq va londa hulosa javob matnini o'zbek tilida tayyorlab bering (max 3-4 cümladan oshmasin).`;
+
+    const response = await aiClient.models.generateContent({
+      model: 'gemini-3.6-flash',
+      contents: prompt,
+    });
+
+    const text = response.text || 'Murojaatingiz belgilangan tartibda o\'rganib chiqildi va hal etildi.';
+    res.json({ suggestedResponse: text });
+  } catch (err) {
+    console.error('Gemini error:', err);
+    res.json({
+      suggestedResponse: `Hurmatli fuqaro, sizning "${organizationName}"ga yo'llagan murojaatingiz mutaxassislar tomonidan atroflicha ko'rib chiqildi hamda belgilangan tartibda ijobiy hal etildi.`,
+    });
   }
 });
 
-// GET Telegram Bot Status
+// 9. Telegram status
 app.get('/api/telegram/status', (req, res) => {
-  res.json({
-    isActive: !!telegramBot,
-    username: botInfo?.username || null,
-    token: botToken ? `${botToken.substring(0, 8)}...` : null,
-  });
+  res.json(botInfo);
 });
 
-// POST Send Telegram Notification
-app.post('/api/telegram/send-notification', async (req, res) => {
-  const { appealId, message } = req.body;
-  if (!appealId || !message) {
-    return res.status(400).json({ error: 'appealId va message majburiy' });
-  }
-
-  const success = await sendAppealUpdateNotification(appealId, message);
-  res.json({ success });
-});
-
-// Health Check
-app.get('/api/health', (req, res) => {
-  res.json({
-    status: 'ok',
-    bot: botInfo,
-    appealsCount: appeals.length,
-    organizationsCount: organizations.length,
-  });
-});
-
-// Catch-all for unhandled /api routes so they return JSON, not HTML
+// Catch-all for unhandled /api routes
 app.all('/api/*', (req, res) => {
   res.status(404).json({ error: `API endpoint topilmadi: ${req.method} ${req.path}` });
 });
@@ -752,7 +705,7 @@ async function startServer() {
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server running on port ${PORT}`);
+    console.log(`🚀 Server running on http://0.0.0.0:${PORT}`);
   });
 }
 
