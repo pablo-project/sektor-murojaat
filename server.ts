@@ -4,32 +4,25 @@ import fs from 'fs';
 import { GoogleGenAI } from '@google/genai';
 import TelegramBot from 'node-telegram-bot-api';
 import { INITIAL_ORGANIZATIONS, INITIAL_APPEALS } from './src/data/initialData.js';
-import { Appeal, Organization, AppealStatus, FeedbackStatus, BotStatusInfo } from './src/types.js';
+import { Appeal, Organization, FeedbackStatus, BotStatusInfo } from './src/types.js';
 
-// Initialize Gemini Client safely
 const apiKey = process.env.GEMINI_API_KEY;
 let aiClient: GoogleGenAI | null = null;
 if (apiKey) {
   aiClient = new GoogleGenAI({
     apiKey: apiKey,
-    httpOptions: {
-      headers: {
-        'User-Agent': 'aistudio-build',
-      },
-    },
+    httpOptions: { headers: { 'User-Agent': 'aistudio-build' } },
   });
 }
 
 const app = express();
 app.use(express.json({ limit: '10mb' }));
 
-// Persistent Data Storage (JSON file on disk)
 const STORAGE_FILE = path.join(process.cwd(), 'data-storage.json');
 
 let organizations: Organization[] = [...INITIAL_ORGANIZATIONS];
 let appeals: Appeal[] = [...INITIAL_APPEALS];
 
-// Load persisted data if file exists
 function loadPersistedData() {
   try {
     if (fs.existsSync(STORAGE_FILE)) {
@@ -51,7 +44,6 @@ function loadPersistedData() {
   }
 }
 
-// Save data to disk
 function savePersistedData() {
   try {
     fs.writeFileSync(
@@ -66,7 +58,6 @@ function savePersistedData() {
 
 loadPersistedData();
 
-// Helper to recalculate organization statistics
 function recalculateOrgStats() {
   organizations = organizations.map((org) => {
     const orgAppeals = appeals.filter((a) => a.organizationId === org.id);
@@ -82,10 +73,8 @@ function recalculateOrgStats() {
   savePersistedData();
 }
 
-// Recalculate initial stats
 recalculateOrgStats();
 
-// Telegram Bot Initialization
 const telegramToken = process.env.TELEGRAM_BOT_TOKEN;
 let telegramBot: TelegramBot | null = null;
 let botInfo: BotStatusInfo = { isActive: false };
@@ -123,7 +112,6 @@ if (telegramToken && telegramToken !== 'YOUR_TELEGRAM_BOT_TOKEN_HERE') {
       console.error('Telegram Polling xatosi:', error.message);
     });
 
-    // 1. /start buyrug'i
     telegramBot.onText(/\/start/, (msg) => {
       const chatId = msg.chat.id;
       userSessions.set(chatId, { step: 'NONE' });
@@ -146,7 +134,6 @@ if (telegramToken && telegramToken !== 'YOUR_TELEGRAM_BOT_TOKEN_HERE') {
       });
     });
 
-    // 2. Yangi murojaat yuborish
     telegramBot.onText(/📝 Yangi murojaat yuborish/, (msg) => {
       const chatId = msg.chat.id;
       userSessions.set(chatId, { step: 'SELECT_ORG' });
@@ -169,7 +156,6 @@ if (telegramToken && telegramToken !== 'YOUR_TELEGRAM_BOT_TOKEN_HERE') {
       );
     });
 
-    // 3. Mening murojaatlarim
     telegramBot.onText(/📋 Mening murojaatlarim holati/, (msg) => {
       const chatId = msg.chat.id;
       const userAppeals = appeals.filter((a) => a.telegramChatId === chatId);
@@ -201,7 +187,6 @@ if (telegramToken && telegramToken !== 'YOUR_TELEGRAM_BOT_TOKEN_HERE') {
       telegramBot?.sendMessage(chatId, text, { parse_mode: 'HTML' });
     });
 
-    // 4. Tashkilotlar ro'yxati
     telegramBot.onText(/🏢 Tashkilotlar ro'yxati/, (msg) => {
       const chatId = msg.chat.id;
       let text = `🏢 <b>Tizimga ulangan tashkilotlar:</b>\n\n`;
@@ -211,7 +196,6 @@ if (telegramToken && telegramToken !== 'YOUR_TELEGRAM_BOT_TOKEN_HERE') {
       telegramBot?.sendMessage(chatId, text, { parse_mode: 'HTML' });
     });
 
-    // 5. Yordam
     telegramBot.onText(/ℹ️ Yordam/, (msg) => {
       const chatId = msg.chat.id;
       telegramBot?.sendMessage(
@@ -220,20 +204,18 @@ if (telegramToken && telegramToken !== 'YOUR_TELEGRAM_BOT_TOKEN_HERE') {
           `1. "Yangi murojaat yuborish" tugmasini bosing.\n` +
           `2. Kerakli tashkilotni tanlang.\n` +
           `3. Ism-familiyangiz va telefoningizni yuboring.\n` +
-          `4. Murojaat mazmunini va fotosini yuboring.\n` +
+          `4. Yashash manzilingiz va murojaat matnini yuboring.\n` +
           `5. Murojaat hal etilgach sizga xabar va fotosurat yuboriladi.`,
         { parse_mode: 'HTML' }
       );
     });
 
-    // Inline button clicks
     telegramBot.on('callback_query', async (query) => {
       const chatId = query.message?.chat.id;
       if (!chatId || !query.data) return;
 
       const session = userSessions.get(chatId) || { step: 'NONE' };
 
-      // Organization selection
       if (query.data.startsWith('org_')) {
         const orgId = query.data.replace('org_', '');
         const org = organizations.find((o) => o.id === orgId);
@@ -253,7 +235,6 @@ if (telegramToken && telegramToken !== 'YOUR_TELEGRAM_BOT_TOKEN_HERE') {
         }
       }
 
-      // Citizen Feedback: "Roziman"
       if (query.data.startsWith('feedback_agree_')) {
         const appealId = query.data.replace('feedback_agree_', '');
         const appeal = appeals.find((a) => a.id === appealId);
@@ -269,7 +250,6 @@ if (telegramToken && telegramToken !== 'YOUR_TELEGRAM_BOT_TOKEN_HERE') {
         }
       }
 
-      // Citizen Feedback: "E'tirozim bor"
       if (query.data.startsWith('feedback_object_')) {
         const appealId = query.data.replace('feedback_object_', '');
         const appeal = appeals.find((a) => a.id === appealId);
@@ -288,7 +268,6 @@ if (telegramToken && telegramToken !== 'YOUR_TELEGRAM_BOT_TOKEN_HERE') {
       }
     });
 
-    // Step by step message collection
     telegramBot.on('message', async (msg) => {
       const chatId = msg.chat.id;
       const text = msg.text?.trim();
@@ -297,7 +276,6 @@ if (telegramToken && telegramToken !== 'YOUR_TELEGRAM_BOT_TOKEN_HERE') {
       if (!session || session.step === 'NONE' || text?.startsWith('/')) return;
       if (text === '📝 Yangi murojaat yuborish' || text === '📋 Mening murojaatlarim holati' || text === '🏢 Tashkilotlar ro\'yxati' || text === 'ℹ️ Yordam') return;
 
-      // Full Name
       if (session.step === 'WAITING_FULLNAME' && text) {
         session.fullName = text;
         session.step = 'WAITING_PHONE';
@@ -321,7 +299,6 @@ if (telegramToken && telegramToken !== 'YOUR_TELEGRAM_BOT_TOKEN_HERE') {
         return;
       }
 
-      // Phone
       if (session.step === 'WAITING_PHONE') {
         let phoneStr = msg.contact?.phone_number || text;
         if (text === '❌ Bekor qilish') {
@@ -333,12 +310,12 @@ if (telegramToken && telegramToken !== 'YOUR_TELEGRAM_BOT_TOKEN_HERE') {
         if (phoneStr) {
           if (!phoneStr.startsWith('+')) phoneStr = `+${phoneStr}`;
           session.phone = phoneStr;
-          session.step = 'WAITING_CONTENT';
+          session.step = 'WAITING_ADDRESS';
           userSessions.set(chatId, session);
 
           await telegramBot?.sendMessage(
             chatId,
-            `Endi murojaatingizning <b>batafsil mazmunini</b> yozing (agar kerak bo‘lsa fotosurat bilan birga yuboring):`,
+            `Yashash <b>manzilingizni</b> kiriting (masalan: Bog'ot MFY, Mustaqillik ko'chasi 12-uy):`,
             {
               parse_mode: 'HTML',
               reply_markup: {
@@ -351,7 +328,31 @@ if (telegramToken && telegramToken !== 'YOUR_TELEGRAM_BOT_TOKEN_HERE') {
         return;
       }
 
-      // Content & Photo
+      if (session.step === 'WAITING_ADDRESS' && text) {
+        if (text === '❌ Bekor qilish') {
+          userSessions.set(chatId, { step: 'NONE' });
+          await telegramBot?.sendMessage(chatId, 'Murojaat bekor qilindi.');
+          return;
+        }
+
+        session.address = text;
+        session.step = 'WAITING_CONTENT';
+        userSessions.set(chatId, session);
+
+        await telegramBot?.sendMessage(
+          chatId,
+          `Endi murojaatingizning <b>batafsil mazmunini</b> yozing (agar kerak bo‘lsa fotosurat bilan birga yuboring):`,
+          {
+            parse_mode: 'HTML',
+            reply_markup: {
+              keyboard: [[{ text: '❌ Bekor qilish' }]],
+              resize_keyboard: true,
+            },
+          }
+        );
+        return;
+      }
+
       if (session.step === 'WAITING_CONTENT') {
         if (text === '❌ Bekor qilish') {
           userSessions.set(chatId, { step: 'NONE' });
@@ -381,6 +382,7 @@ if (telegramToken && telegramToken !== 'YOUR_TELEGRAM_BOT_TOKEN_HERE') {
           organizationName: session.orgName || 'Tashkilot',
           fullName: session.fullName || 'Fuqaro',
           phone: session.phone || '+998 90 000-00-00',
+          address: session.address || '',
           content: appealContent,
           attachmentUrl: photoLink,
           category: organizations.find((o) => o.id === session.orgId)?.category || 'Umumiy',
@@ -416,14 +418,13 @@ if (telegramToken && telegramToken !== 'YOUR_TELEGRAM_BOT_TOKEN_HERE') {
         return;
       }
 
-      // Objection reason
       if (session.step === 'WAITING_OBJECTION' && text && session.appealIdForObjection) {
         const appeal = appeals.find((a) => a.id === session.appealIdForObjection);
         if (appeal) {
           appeal.feedback = 'etirozli';
           appeal.objectionText = text;
           appeal.objectionAt = new Date().toISOString();
-          appeal.status = 'jarayonda'; // Reopen appeal
+          appeal.status = 'jarayonda';
           recalculateOrgStats();
 
           await telegramBot?.sendMessage(
@@ -439,7 +440,6 @@ if (telegramToken && telegramToken !== 'YOUR_TELEGRAM_BOT_TOKEN_HERE') {
   }
 }
 
-// Function to notify Telegram user when appeal is resolved
 async function notifyTelegramUserResolved(appeal: Appeal) {
   if (!telegramBot || !appeal.telegramChatId) return;
 
@@ -477,21 +477,16 @@ async function notifyTelegramUserResolved(appeal: Appeal) {
   }
 }
 
-// REST API Endpoints
-
-// 0. Auth Login
 app.post('/api/auth/login', (req, res) => {
   const { password } = req.body;
   if (!password) {
     return res.status(400).json({ success: false, message: 'Parol kiritilmadi' });
   }
 
-  // Super Admin / Bosh Kabinet passwords
   if (password === 'admin123' || password === 'admin2026' || password === 'pablo2026') {
     return res.json({ success: true, role: 'bosh_kabinet' });
   }
 
-  // Organization custom passwords
   const org = organizations.find((o) => o.password === password);
   if (org) {
     return res.json({ success: true, role: 'tashkilot', organization: org });
@@ -500,13 +495,11 @@ app.post('/api/auth/login', (req, res) => {
   return res.status(401).json({ success: false, message: 'Kiritilgan maxsus parol noto‘g‘ri!' });
 });
 
-// 1. Get all organizations
 app.get('/api/organizations', (req, res) => {
   recalculateOrgStats();
   res.json(organizations);
 });
 
-// 2. Add organization
 app.post('/api/organizations', (req, res) => {
   const { name, code, category, phone, leader, password } = req.body;
   if (!name || !code) {
@@ -533,7 +526,6 @@ app.post('/api/organizations', (req, res) => {
   res.status(201).json(newOrg);
 });
 
-// 3. Get appeals
 app.get('/api/appeals', (req, res) => {
   const { organizationId, status, feedback, search } = req.query;
   let filtered = [...appeals];
@@ -562,7 +554,6 @@ app.get('/api/appeals', (req, res) => {
   res.json(filtered);
 });
 
-// 4. Accept appeal
 app.patch('/api/appeals/:id/accept', (req, res) => {
   const { id } = req.params;
   const { operatorName } = req.body;
@@ -580,7 +571,6 @@ app.patch('/api/appeals/:id/accept', (req, res) => {
   res.json(appeal);
 });
 
-// 5. Reject authority
 app.patch('/api/appeals/:id/reject-authority', (req, res) => {
   const { id } = req.params;
   const { reason } = req.body;
@@ -597,7 +587,6 @@ app.patch('/api/appeals/:id/reject-authority', (req, res) => {
   res.json(appeal);
 });
 
-// 6. Resolve appeal
 app.patch('/api/appeals/:id/resolve', async (req, res) => {
   const { id } = req.params;
   const { resolutionText, resolutionPhotoUrl } = req.body;
@@ -623,7 +612,6 @@ app.patch('/api/appeals/:id/resolve', async (req, res) => {
   res.json(appeal);
 });
 
-// 7. Feedback
 app.patch('/api/appeals/:id/feedback', (req, res) => {
   const { id } = req.params;
   const { feedback, objectionText } = req.body;
@@ -643,7 +631,6 @@ app.patch('/api/appeals/:id/feedback', (req, res) => {
   res.json(appeal);
 });
 
-// 8. Gemini AI Response
 app.post('/api/gemini/suggest-response', async (req, res) => {
   const { appealContent, organizationName } = req.body;
 
@@ -675,17 +662,14 @@ Ushbu murojaat hal etilganligi bo'yicha rasmiy, xushmuomala, aniq va londa hulos
   }
 });
 
-// 9. Telegram status
 app.get('/api/telegram/status', (req, res) => {
   res.json(botInfo);
 });
 
-// Catch-all for unhandled /api routes
 app.all('/api/*', (req, res) => {
   res.status(404).json({ error: `API endpoint topilmadi: ${req.method} ${req.path}` });
 });
 
-// Start Express Server
 async function startServer() {
   const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 

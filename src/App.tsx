@@ -32,7 +32,6 @@ export default function App() {
         setOrganizations(orgsData);
         setAppeals(appealsData);
 
-        // Keep authenticatedOrg updated if stats changed
         if (authenticatedOrg) {
           const updated = orgsData.find((o) => o.id === authenticatedOrg.id);
           if (updated) setAuthenticatedOrg(updated);
@@ -52,7 +51,7 @@ export default function App() {
 
   useEffect(() => {
     fetchData();
-    // Poll data every 5 seconds to simulate real-time updates across windows/tabs
+    // Real vaqt rejimida har 5 soniyada avtomatik tekshirib yangilab turadi
     const interval = setInterval(fetchData, 5000);
     return () => clearInterval(interval);
   }, []);
@@ -72,7 +71,6 @@ export default function App() {
     setAuthenticatedOrg(null);
   };
 
-  // 1. Organization accepts appeal ("Bajaraman")
   const handleAcceptAppeal = async (appealId: string, operatorName: string) => {
     setIsLoading(true);
     try {
@@ -81,10 +79,7 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ operatorName }),
       });
-
-      if (res.ok) {
-        await fetchData();
-      }
+      if (res.ok) await fetchData();
     } catch (err) {
       console.error('Error accepting appeal:', err);
     } finally {
@@ -92,7 +87,6 @@ export default function App() {
     }
   };
 
-  // 2. Organization rejects authority ("Mening vakolatimda emas")
   const handleRejectAuthority = async (appealId: string, reason: string) => {
     setIsLoading(true);
     try {
@@ -101,10 +95,7 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ reason }),
       });
-
-      if (res.ok) {
-        await fetchData();
-      }
+      if (res.ok) await fetchData();
     } catch (err) {
       console.error('Error rejecting authority:', err);
     } finally {
@@ -112,7 +103,6 @@ export default function App() {
     }
   };
 
-  // 3. Organization resolves appeal (Hulosa + Rasm)
   const handleResolveAppeal = async (appealId: string, resolutionText: string, photoUrl?: string) => {
     setIsLoading(true);
     try {
@@ -121,10 +111,7 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ resolutionText, resolutionPhotoUrl: photoUrl }),
       });
-
-      if (res.ok) {
-        await fetchData();
-      }
+      if (res.ok) await fetchData();
     } catch (err) {
       console.error('Error resolving appeal:', err);
     } finally {
@@ -132,7 +119,6 @@ export default function App() {
     }
   };
 
-  // 4. Gemini AI draft response generator
   const handleGenerateAiResponse = async (appealContent: string, orgName: string): Promise<string> => {
     try {
       const res = await fetch('/api/gemini/suggest-response', {
@@ -140,7 +126,6 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ appealContent, organizationName: orgName }),
       });
-
       if (res.ok) {
         const data = await res.json();
         return data.suggestedResponse;
@@ -151,7 +136,6 @@ export default function App() {
     return `Hurmatli fuqaro, sizning murojaatingiz ${orgName} mas'ul xodimlari tomonidan ko'rib chiqildi hamda belgilangan tartibda ijobiy hal etildi.`;
   };
 
-  // 5. Bosh Kabinet adds new Organization
   const handleAddOrganization = async (orgData: {
     name: string;
     code: string;
@@ -167,10 +151,7 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(orgData),
       });
-
-      if (res.ok) {
-        await fetchData();
-      }
+      if (res.ok) await fetchData();
     } catch (err) {
       console.error('Error adding organization:', err);
     } finally {
@@ -178,7 +159,6 @@ export default function App() {
     }
   };
 
-  // Render Login Portal if not authenticated
   if (userRole === 'guest') {
     return (
       <LoginScreen
@@ -191,7 +171,6 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-100 text-slate-900 font-sans antialiased flex flex-col">
-      {/* Authenticated Header */}
       <header className="bg-slate-900 border-b border-slate-800 text-white sticky top-0 z-40 shadow-lg">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3 flex items-center justify-between">
           <div className="flex items-center space-x-3">
@@ -243,7 +222,6 @@ export default function App() {
         </div>
       </header>
 
-      {/* Main View Area */}
       <main className="flex-1">
         {userRole === 'tashkilot' && authenticatedOrg && (
           <TashkilotDashboard
@@ -267,7 +245,6 @@ export default function App() {
         )}
       </main>
 
-      {/* Footer */}
       <footer className="bg-slate-900 border-t border-slate-800 text-slate-400 text-xs py-4 text-center">
         <p>
           © 2026 Murojaatlar va Tashkilotlar Boshqaruvi Axborot Tizimi • Xavfsiz Maxsus Parol va Telegram Bot Integratsiyasi
