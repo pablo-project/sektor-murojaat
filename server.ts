@@ -1,4 +1,5 @@
 import express from 'express';
+import cors from 'cors';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
@@ -24,8 +25,13 @@ if (apiKey) {
 }
 
 const app = express();
-app.use(express.json({ limit: '10mb' }));
 
+app.use(cors({
+  origin: true,
+  credentials: false,
+}));
+
+app.use(express.json({ limit: '10mb' }));
 // In-Memory Data Store
 let organizations: Organization[] = [...INITIAL_ORGANIZATIONS];
 let appeals: Appeal[] = [...INITIAL_APPEALS];
@@ -50,6 +56,7 @@ recalculateOrgStats();
 
 // Telegram Bot Initialization
 const telegramToken = process.env.TELEGRAM_BOT_TOKEN;
+const telegramAdminChatId = process.env.TELEGRAM_ADMIN_CHAT_ID;
 let telegramBot: TelegramBot | null = null;
 let botInfo: BotStatusInfo = { isActive: false };
 
@@ -650,7 +657,7 @@ Ushbu murojaat hal etilganligi bo'yicha rasmiy, xushmuomala, aniq va londa hulos
 // Start Express Server
 async function startServer() {
   
-  const PORT = Number(process.env.PORT) || 3000;
+const PORT = Number(process.env.PORT) || 3000;
 
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({

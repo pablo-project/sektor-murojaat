@@ -1,10 +1,11 @@
+
 import React, { useState, useEffect } from 'react';
 import { TashkilotDashboard } from './components/TashkilotDashboard';
 import { BoshKabinetDashboard } from './components/BoshKabinetDashboard';
 import { LoginScreen } from './components/LoginScreen';
 import { Organization, Appeal } from './types';
 import { Building2, ShieldCheck, RefreshCw, LogOut, Bot } from 'lucide-react';
-
+const API_URL = 'https://sektor-murojaat.onrender.com';
 export default function App() {
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [appeals, setAppeals] = useState<Appeal[]>([]);
@@ -19,12 +20,11 @@ export default function App() {
   const fetchData = async () => {
     setIsLoading(true);
     try {
-      const [orgsRes, appealsRes, botRes] = await Promise.all([
-        fetch('/api/organizations'),
-        fetch('/api/appeals'),
-        fetch('/api/telegram/status'),
-      ]);
-
+const [orgsRes, appealsRes, botRes] = await Promise.all([
+  fetch(`${API_URL}/api/organizations`),
+  fetch(`${API_URL}/api/appeals`),
+  fetch(`${API_URL}/api/telegram/status`),
+]);
       if (orgsRes.ok && appealsRes.ok) {
         const orgsData: Organization[] = await orgsRes.json();
         const appealsData: Appeal[] = await appealsRes.json();
@@ -76,7 +76,7 @@ export default function App() {
   const handleAcceptAppeal = async (appealId: string, operatorName: string) => {
     setIsLoading(true);
     try {
-      const res = await fetch(`/api/appeals/${appealId}/accept`, {
+     const res = await fetch(`${API_URL}/api/appeals/${appealId}/accept`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ operatorName }),
@@ -96,7 +96,7 @@ export default function App() {
   const handleRejectAuthority = async (appealId: string, reason: string) => {
     setIsLoading(true);
     try {
-      const res = await fetch(`/api/appeals/${appealId}/reject-authority`, {
+  const res = await fetch(`${API_URL}/api/appeals/${appealId}/reject-authority`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ reason }),
@@ -116,7 +116,7 @@ export default function App() {
   const handleResolveAppeal = async (appealId: string, resolutionText: string, photoUrl?: string) => {
     setIsLoading(true);
     try {
-      const res = await fetch(`/api/appeals/${appealId}/resolve`, {
+     const res = await fetch(`${API_URL}/api/appeals/${appealId}/resolve`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ resolutionText, resolutionPhotoUrl: photoUrl }),
@@ -135,7 +135,7 @@ export default function App() {
   // 4. Gemini AI draft response generator
   const handleGenerateAiResponse = async (appealContent: string, orgName: string): Promise<string> => {
     try {
-      const res = await fetch('/api/gemini/suggest-response', {
+     const res = await fetch(`${API_URL}/api/gemini/suggest-response`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ appealContent, organizationName: orgName }),
@@ -162,7 +162,7 @@ export default function App() {
   }) => {
     setIsLoading(true);
     try {
-      const res = await fetch('/api/organizations', {
+      const res = await fetch(`${API_URL}/api/organizations`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(orgData),
