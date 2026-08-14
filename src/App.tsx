@@ -1,283 +1,307 @@
-
 import React, { useState, useEffect } from 'react';
+import { Header } from './components/Header';
+import { StatsOverview } from './components/StatsOverview';
+import { RoleSelector } from './components/RoleSelector';
+import { SuperAdminDashboard } from './components/SuperAdminDashboard';
 import { TashkilotDashboard } from './components/TashkilotDashboard';
-import { BoshKabinetDashboard } from './components/BoshKabinetDashboard';
-import { LoginScreen } from './components/LoginScreen';
-import { Organization, Appeal } from './types';
-import { Building2, ShieldCheck, RefreshCw, LogOut, Bot } from 'lucide-react';
-const API_URL = 'https://sektor-murojaat.onrender.com';
-export default function App() {
-  const [organizations, setOrganizations] = useState<Organization[]>([]);
-  const [appeals, setAppeals] = useState<Appeal[]>([]);
-  const [isLoading, setIsLoading] = useState<boolean>(false);
-  const [botStatus, setBotStatus] = useState<{ isActive: boolean; botUsername?: string }>({ isActive: false });
+import { LoginModal } from './components/LoginModal';
+import { TelegramSettingsModal } from './components/TelegramSettingsModal';
+import { Organization, Appeal, UserRole } from './types';
+import { INITIAL_ORGANIZATIONS, INITIAL_APPEALS } from './data/initialData';
+import {
+  Sparkles,
+  Bot,
+  BrainCircuit,
+  RotateCcw,
+  FileSpreadsheet,
+  Radio,
+} from 'lucide-react';
 
-  // Authentication State
-  const [userRole, setUserRole] = useState<'guest' | 'tashkilot' | 'bosh_kabinet'>('guest');
-  const [authenticatedOrg, setAuthenticatedOrg] = useState<Organization | null>(null);
+export function App() {
+  const [organizations, setOrganizations] = useState<Organization[]>(INITIAL_ORGANIZATIONS);
+  const [appeals, setAppeals] = useState<Appeal[]>(INITIAL_APPEALS);
+  const [activeRole, setActiveRole] = useState<UserRole>('SUPER_ADMIN');
+  const [isTelegramModalOpen, setIsTelegramModalOpen] = useState(false);
+  const [isAiModalOpen, setIsAiModalOpen] = useState(false);
+  const [analysisPrompt, setAnalysisPrompt] = useState('');
+  const [aiAnalysisResult, setAiAnalysisResult] = useState<string | null>(null);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [isLiveSync, setIsLiveSync] = useState(true);
 
-  // Fetch data from backend API
+  // Fetch initial data from server
   const fetchData = async () => {
-    setIsLoading(true);
     try {
-const [orgsRes, appealsRes, botRes] = await Promise.all([
-  fetch(`${API_URL}/api/organizations`),
-  fetch(`${API_URL}/api/appeals`),
-  fetch(`${API_URL}/api/telegram/status`),
-]);
-      if (orgsRes.ok && appealsRes.ok) {
-        const orgsData: Organization[] = await orgsRes.json();
-        const appealsData: Appeal[] = await appealsRes.json();
+      const [orgsRes, appealsRes] = await Promise.all([
+        fetch('/api/organizations'),
+        fetch('/api/appeals'),
+      ]).catch(() => [null, null]);
 
-        setOrganizations(orgsData);
-        setAppeals(appealsData);
-
-        // Keep authenticatedOrg updated if stats changed
-        if (authenticatedOrg) {
-          const updated = orgsData.find((o) => o.id === authenticatedOrg.id);
-          if (updated) setAuthenticatedOrg(updated);
+      if (orgsRes && orgsRes.ok) {
+        const contentType = orgsRes.headers.get('content-type') || '';
+        if (contentType.includes('application/json')) {
+          const orgsData = await orgsRes.json();
+          if (Array.isArray(orgsData)) setOrganizations(orgsData);
         }
       }
 
-      if (botRes.ok) {
-        const bData = await botRes.json();
-        setBotStatus(bData);
+      if (appealsRes && appealsRes.ok) {
+        const contentType = appealsRes.headers.get('content-type') || '';
+        if (contentType.includes('application/json')) {
+          const appealsData = await appealsRes.json();
+          if (Array.isArray(appealsData)) setAppeals(appealsData);
+        }
       }
     } catch (err) {
-      console.error('Data fetching error:', err);
-    } finally {
-      setIsLoading(false);
+      // Silently fall back to existing local state on network glitches
+      console.warn('Data sync notice:', err);
     }
   };
 
   useEffect(() => {
     fetchData();
-    // Poll data every 5 seconds to simulate real-time updates across windows/tabs
-    const interval = setInterval(fetchData, 5000);
+    // Polling every 5 seconds for real-time updates from Telegram Bot
+    const interval = setInterval(() => {
+      if (isLiveSync) {
+        fetchData();
+      }
+    }, 5000);
     return () => clearInterval(interval);
-  }, []);
+  }, [isLiveSync]);
 
-  const handleLoginSuccess = (role: 'tashkilot' | 'bosh_kabinet', organization?: Organization) => {
-    if (role === 'bosh_kabinet') {
-      setUserRole('bosh_kabinet');
-      setAuthenticatedOrg(null);
-    } else if (role === 'tashkilot' && organization) {
-      setUserRole('tashkilot');
-      setAuthenticatedOrg(organization);
-    }
-  };
-
-  const handleLogout = () => {
-    setUserRole('guest');
-    setAuthenticatedOrg(null);
-  };
-
-  // 1. Organization accepts appeal ("Bajaraman")
-  const handleAcceptAppeal = async (appealId: string, operatorName: string) => {
-    setIsLoading(true);
+  // Super Admin: Add new appeal
+  const handleAddAppeal = async (newAppealData: Omit<Appeal, 'id' | 'appealNumber' | 'createdAt'>) => {
     try {
-     const res = await fetch(`${API_URL}/api/appeals/${appealId}/accept`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ operatorName }),
-      });
-
-      if (res.ok) {
-        await fetchData();
-      }
-    } catch (err) {
-      console.error('Error accepting appeal:', err);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  // 2. Organization rejects authority ("Mening vakolatimda emas")
-  const handleRejectAuthority = async (appealId: string, reason: string) => {
-    setIsLoading(true);
-    try {
-  const res = await fetch(`${API_URL}/api/appeals/${appealId}/reject-authority`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ reason }),
-      });
-
-      if (res.ok) {
-        await fetchData();
-      }
-    } catch (err) {
-      console.error('Error rejecting authority:', err);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  // 3. Organization resolves appeal (Hulosa + Rasm)
-  const handleResolveAppeal = async (appealId: string, resolutionText: string, photoUrl?: string) => {
-    setIsLoading(true);
-    try {
-     const res = await fetch(`${API_URL}/api/appeals/${appealId}/resolve`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ resolutionText, resolutionPhotoUrl: photoUrl }),
-      });
-
-      if (res.ok) {
-        await fetchData();
-      }
-    } catch (err) {
-      console.error('Error resolving appeal:', err);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  // 4. Gemini AI draft response generator
-  const handleGenerateAiResponse = async (appealContent: string, orgName: string): Promise<string> => {
-    try {
-     const res = await fetch(`${API_URL}/api/gemini/suggest-response`, {
+      const res = await fetch('/api/appeals', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ appealContent, organizationName: orgName }),
+        body: JSON.stringify(newAppealData),
       });
+      const contentType = res.headers.get('content-type') || '';
+      if (res.ok && contentType.includes('application/json')) {
+        const savedAppeal = await res.json();
+        if (savedAppeal && savedAppeal.id) {
+          setAppeals((prev) => [savedAppeal, ...prev]);
+        }
+        fetchData(); // Sync organizations stats
+      }
+    } catch (err) {
+      console.error('Failed to add appeal:', err);
+    }
+  };
 
+  // Update Appeal (Tashkilot or Super Admin)
+  const handleUpdateAppeal = async (updatedAppeal: Appeal) => {
+    try {
+      const res = await fetch(`/api/appeals/${updatedAppeal.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updatedAppeal),
+      });
       if (res.ok) {
+        setAppeals((prev) =>
+          prev.map((a) => (a.id === updatedAppeal.id ? updatedAppeal : a))
+        );
+        fetchData();
+      }
+    } catch (err) {
+      console.error('Failed to update appeal:', err);
+    }
+  };
+
+  // Super Admin: Register new organization
+  const handleAddOrganization = async (newOrgData: Omit<Organization, 'id' | 'totalAppeals' | 'completedAppeals' | 'inProgressAppeals' | 'expiredAppeals' | 'rejectedAuthorityAppeals'>) => {
+    try {
+      const res = await fetch('/api/organizations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newOrgData),
+      });
+      const contentType = res.headers.get('content-type') || '';
+      if (res.ok && contentType.includes('application/json')) {
+        const savedOrg = await res.json();
+        if (savedOrg && savedOrg.id) {
+          setOrganizations((prev) => [...prev, savedOrg]);
+        }
+        fetchData();
+      }
+    } catch (err) {
+      console.error('Failed to add organization:', err);
+    }
+  };
+
+  // Super Admin: Update organization password/info
+  const handleUpdateOrganization = async (updatedOrg: Organization) => {
+    try {
+      const res = await fetch(`/api/organizations/${updatedOrg.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updatedOrg),
+      });
+      if (res.ok) {
+        setOrganizations((prev) =>
+          prev.map((o) => (o.id === updatedOrg.id ? updatedOrg : o))
+        );
+      }
+    } catch (err) {
+      console.error('Failed to update organization:', err);
+    }
+  };
+
+  // Super Admin: Delete organization
+  const handleDeleteOrganization = async (id: string) => {
+    try {
+      const res = await fetch(`/api/organizations/${id}`, {
+        method: 'DELETE',
+      });
+      if (res.ok) {
+        setOrganizations((prev) => prev.filter((o) => o.id !== id));
+        setAppeals((prev) => prev.filter((a) => a.organizationId !== id));
+      }
+    } catch (err) {
+      console.error('Failed to delete organization:', err);
+    }
+  };
+
+  // AI Smart Summary & Analytics
+  const handleAnalyzeWithAI = async (prompt: string) => {
+    setIsAnalyzing(true);
+    setAiAnalysisResult(null);
+    try {
+      const res = await fetch('/api/ai/analyze-appeals', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt }),
+      });
+      const contentType = res.headers.get('content-type') || '';
+      if (contentType.includes('application/json')) {
         const data = await res.json();
-        return data.suggestedResponse;
+        if (res.ok) {
+          setAiAnalysisResult(data.analysis);
+        } else {
+          setAiAnalysisResult(`Xatolik: ${data.error || 'Tahlil qilib bo‘lmadi'}`);
+        }
+      } else {
+        const text = await res.text();
+        setAiAnalysisResult(`Xatolik: ${text || 'Tahlil qilib bo‘lmadi'}`);
       }
-    } catch (err) {
-      console.error('AI draft generation failed:', err);
+    } catch (err: any) {
+      setAiAnalysisResult(`Tizim xatosi: ${err.message || err}`);
+    } finally {
+      setIsAnalyzing(false);
     }
-    return `Hurmatli fuqaro, sizning murojaatingiz ${orgName} mas'ul xodimlari tomonidan ko'rib chiqildi hamda belgilangan tartibda ijobiy hal etildi.`;
   };
 
-  // 5. Bosh Kabinet adds new Organization
-  const handleAddOrganization = async (orgData: {
-    name: string;
-    code: string;
-    category: string;
-    phone: string;
-    leader: string;
-    password?: string;
-  }) => {
-    setIsLoading(true);
+  // Send Telegram Notification Helper
+  const handleSendTelegramNotification = async (appealId: string, messageText: string) => {
     try {
-      const res = await fetch(`${API_URL}/api/organizations`, {
+      await fetch('/api/telegram/send-notification', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(orgData),
+        body: JSON.stringify({ appealId, message: messageText }),
       });
-
-      if (res.ok) {
-        await fetchData();
-      }
-    } catch (err) {
-      console.error('Error adding organization:', err);
-    } finally {
-      setIsLoading(false);
+    } catch (e) {
+      console.error('Failed to send telegram notification:', e);
     }
   };
-
-  // Render Login Portal if not authenticated
-  if (userRole === 'guest') {
-    return (
-      <LoginScreen
-        organizations={organizations}
-        onLoginSuccess={handleLoginSuccess}
-        botStatus={botStatus}
-      />
-    );
-  }
 
   return (
-    <div className="min-h-screen bg-slate-100 text-slate-900 font-sans antialiased flex flex-col">
-      
-      {/* Clean Authenticated Header */}
-      <header className="bg-slate-900 border-b border-slate-800 text-white sticky top-0 z-40 shadow-lg">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3 flex items-center justify-between">
-          
-          {/* Active Context Title */}
-          <div className="flex items-center space-x-3">
-            <div className={`p-2.5 rounded-xl text-white shadow-md ${
-              userRole === 'tashkilot' ? 'bg-indigo-600 shadow-indigo-600/30' : 'bg-emerald-600 shadow-emerald-600/30'
-            }`}>
-              {userRole === 'tashkilot' ? <Building2 className="w-5 h-5" /> : <ShieldCheck className="w-5 h-5" />}
-            </div>
-            <div>
-              <h1 className="text-base font-extrabold text-slate-100 tracking-tight flex items-center space-x-2">
-                <span>{userRole === 'tashkilot' ? authenticatedOrg?.name : '👑 Bosh Kabinet (Super Admin)'}</span>
-              </h1>
-              <p className="text-xs text-slate-400">
-                {userRole === 'tashkilot' ? 'Murojaatlarni ijro etish va xulosa yuborish paneli' : 'Sektorlar va Tashkilotlar umumiy nazorat portali'}
-              </p>
-            </div>
-          </div>
+    <div className="min-h-screen bg-slate-100 text-slate-900 font-sans antialiased">
+      {/* Top Header */}
+      <Header
+        onOpenTelegramSettings={() => setIsTelegramModalOpen(true)}
+        onOpenAiAnalytics={() => setIsAiModalOpen(true)}
+        isLiveSync={isLiveSync}
+        onToggleLiveSync={() => setIsLiveSync((prev) => !prev)}
+      />
 
-          {/* Right Action Controls */}
-          <div className="flex items-center space-x-3">
-            {botStatus.botUsername && (
-              <a
-                href={`https://t.me/${botStatus.botUsername}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="hidden sm:flex items-center space-x-1.5 bg-slate-800 hover:bg-slate-700 text-emerald-400 border border-slate-700 text-xs font-semibold px-3 py-1.5 rounded-xl transition-all"
-              >
-                <Bot className="w-3.5 h-3.5" />
-                <span>@{botStatus.botUsername}</span>
-              </a>
-            )}
+      <main className="container mx-auto px-4 py-6 max-w-7xl">
+        {/* Stats Bar */}
+        <StatsOverview organizations={organizations} appeals={appeals} />
 
-            <button
-              onClick={fetchData}
-              disabled={isLoading}
-              title="Ma'lumotlarni yangilash"
-              className="p-2 rounded-xl bg-slate-800 text-slate-300 hover:text-white hover:bg-slate-700 border border-slate-700 transition-colors disabled:opacity-50"
-            >
-              <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin text-blue-400' : ''}`} />
-            </button>
+        {/* Role Navigation Bar */}
+        <RoleSelector
+          organizations={organizations}
+          activeRole={activeRole}
+          onSelectRole={setActiveRole}
+        />
 
-            <button
-              onClick={handleLogout}
-              className="flex items-center space-x-1.5 bg-rose-600/20 hover:bg-rose-600/30 text-rose-300 border border-rose-500/30 text-xs font-bold px-3.5 py-1.5 rounded-xl transition-all"
-            >
-              <LogOut className="w-3.5 h-3.5" />
-              <span>Chiqish</span>
-            </button>
-          </div>
-
+        {/* Role View */}
+        <div className="mt-6">
+          {activeRole === 'SUPER_ADMIN' ? (
+            <SuperAdminDashboard
+              organizations={organizations}
+              appeals={appeals}
+              onAddAppeal={handleAddAppeal}
+              onUpdateAppeal={handleUpdateAppeal}
+              onAddOrganization={handleAddOrganization}
+              onUpdateOrganization={handleUpdateOrganization}
+              onDeleteOrganization={handleDeleteOrganization}
+              onSendTelegramNotification={handleSendTelegramNotification}
+            />
+          ) : (
+            <TashkilotDashboard
+              organization={organizations.find((o) => o.id === activeRole)!}
+              appeals={appeals.filter((a) => a.organizationId === activeRole)}
+              onUpdateAppeal={handleUpdateAppeal}
+              onSendTelegramNotification={handleSendTelegramNotification}
+            />
+          )}
         </div>
-      </header>
-
-      {/* Main View Area */}
-      <main className="flex-1">
-        {userRole === 'tashkilot' && authenticatedOrg && (
-          <TashkilotDashboard
-            organization={authenticatedOrg}
-            appeals={appeals}
-            onAcceptAppeal={handleAcceptAppeal}
-            onRejectAuthority={handleRejectAuthority}
-            onResolveAppeal={handleResolveAppeal}
-            onGenerateAiResponse={handleGenerateAiResponse}
-            isLoading={isLoading}
-          />
-        )}
-
-        {userRole === 'bosh_kabinet' && (
-          <BoshKabinetDashboard
-            organizations={organizations}
-            appeals={appeals}
-            onAddOrganization={handleAddOrganization}
-            isLoading={isLoading}
-          />
-        )}
       </main>
 
-      {/* Footer */}
-      <footer className="bg-slate-900 border-t border-slate-800 text-slate-400 text-xs py-4 text-center">
-        <p>
-          © 2026 Murojaatlar va Tashkilotlar Boshqaruvi Axborot Tizimi • Xavfsiz Maxsus Parol va Telegram Bot Integratsiyasi
-        </p>
-      </footer>
+      {/* Telegram Settings Modal */}
+      <TelegramSettingsModal
+        isOpen={isTelegramModalOpen}
+        onClose={() => setIsTelegramModalOpen(false)}
+      />
+
+      {/* AI Analytics Modal */}
+      {isAiModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-xs">
+          <div className="w-full max-w-2xl overflow-hidden rounded-2xl bg-white shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-100 bg-linear-to-r from-purple-600 to-indigo-700 px-6 py-4 text-white">
+              <div className="flex items-center gap-2">
+                <Sparkles className="h-6 w-6" />
+                <h3 className="text-lg font-bold">AI Tahlil va Maslahatchi (Gemini 2.5)</h3>
+              </div>
+              <button
+                onClick={() => setIsAiModalOpen(false)}
+                className="rounded-lg p-1 text-white/80 hover:bg-white/10 hover:text-white"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="p-6">
+              <p className="text-sm text-slate-600 mb-4">
+                Tuman sektoridagi barcha murojaatlar, tashkilotlar faolligi va e'tirozlar asosida sun'iy intellekt orqali chuqur tahlil oling.
+              </p>
+
+              <div className="flex gap-2 mb-4">
+                <input
+                  type="text"
+                  placeholder="Masalan: Eng ko'p muammo bo'layotgan 3 ta soha va sabablari..."
+                  value={analysisPrompt}
+                  onChange={(e) => setAnalysisPrompt(e.target.value)}
+                  className="flex-1 rounded-xl border border-slate-200 px-4 py-2.5 text-sm focus:border-indigo-500 focus:outline-hidden"
+                />
+                <button
+                  onClick={() => handleAnalyzeWithAI(analysisPrompt)}
+                  disabled={isAnalyzing}
+                  className="flex items-center gap-2 rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
+                >
+                  {isAnalyzing ? 'Tahlil qilinmoqda...' : 'Tahlil qilish'}
+                </button>
+              </div>
+
+              {aiAnalysisResult && (
+                <div className="mt-4 max-h-80 overflow-y-auto rounded-xl bg-slate-50 p-4 text-sm text-slate-800 border border-slate-200 whitespace-pre-line leading-relaxed">
+                  {aiAnalysisResult}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
