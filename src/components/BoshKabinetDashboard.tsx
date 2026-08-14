@@ -138,7 +138,7 @@ export const BoshKabinetDashboard: React.FC<BoshKabinetDashboardProps> = ({
             <div className="flex items-center space-x-2">
               <h2 className="text-xl font-extrabold text-slate-100">Bosh Kabinet (Natsional Nazorat)</h2>
               <span className="bg-emerald-500/20 text-emerald-300 text-xs px-3 py-0.5 rounded-full font-bold border border-emerald-500/30">
-                Super Admin
+
               </span>
             </div>
             <p className="text-xs text-slate-300 mt-1">

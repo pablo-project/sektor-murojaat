@@ -88,7 +88,7 @@ export const TelegramBotView: React.FC<TelegramBotViewProps> = ({
     await onSubmitFeedback(objectionModalAppealId, 'etirozli', objectionReason);
     setObjectionModalAppealId(null);
     setObjectionReason('');
-    alert('E\'tirozingiz qabul qilindi va bevosita BOSH KABINET (Super Admin) nazoratiga yuborildi!');
+    alert('E\'tirozingiz qabul qilindi va bevosita BOSH KABINET  nazoratiga yuborildi!');
   };
 
   return (
@@ -467,7 +467,7 @@ export const TelegramBotView: React.FC<TelegramBotViewProps> = ({
                                   E'tiroz sababi: "{item.objectionText}"
                                 </p>
                                 <span className="text-[10px] text-rose-700 block font-semibold">
-                                  ⚠️ Ushbu e'tiroz va murojaat BOSH KABINET (Super Admin) nazoratiga yuborildi.
+                                  ⚠️ Ushbu e'tiroz va murojaat BOSH KABINET nazoratiga yuborildi.
                                 </span>
                               </div>
                             )}
@@ -506,7 +506,7 @@ export const TelegramBotView: React.FC<TelegramBotViewProps> = ({
               <div>
                 <h3 className="font-bold text-slate-900 text-base">E'tirozingizni Kiriting</h3>
                 <p className="text-xs text-slate-500">
-                  Ushbu e'tiroz bevosita Bosh Kabinet (Super Admin)ga boradi
+                  Ushbu e'tiroz bevosita Bosh Kabinetga boradi
                 </p>
               </div>
             </div>

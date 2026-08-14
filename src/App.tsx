@@ -181,7 +181,7 @@ export default function App() {
             </div>
             <div>
               <h1 className="text-base font-extrabold text-slate-100 tracking-tight flex items-center space-x-2">
-                <span>{userRole === 'tashkilot' ? authenticatedOrg?.name : '👑 Bosh Kabinet (Super Admin)'}</span>
+                <span>{userRole === 'tashkilot' ? authenticatedOrg?.name : '👑 Bosh Kabinet'}</span>
               </h1>
               <p className="text-xs text-slate-400">
                 {userRole === 'tashkilot' ? 'Murojaatlarni ijro etish va xulosa yuborish paneli' : 'Sektorlar va Tashkilotlar umumiy nazorat portali'}
