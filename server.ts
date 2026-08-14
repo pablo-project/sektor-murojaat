@@ -75,9 +75,16 @@ function recalculateOrgStats() {
 
 recalculateOrgStats();
 
-const telegramToken = process.env.TELEGRAM_BOT_TOKEN;
+let telegramToken: string | null = process.env.TELEGRAM_BOT_TOKEN || null;
 let telegramBot: TelegramBot | null = null;
 let botInfo: BotStatusInfo = { isActive: false };
+
+function sanitizeBotToken(raw?: string | null): string | null {
+  if (!raw) return null;
+  const cleaned = raw.trim().replace(/^['"]|['"]$/g, '');
+  if (cleaned.length < 15 || !cleaned.includes(':')) return null;
+  return cleaned;
+}
 
 interface UserTelegramSession {
   step: 'NONE' | 'SELECT_ORG' | 'WAITING_FULLNAME' | 'WAITING_PHONE' | 'WAITING_ADDRESS' | 'WAITING_CONTENT' | 'WAITING_OBJECTION';
@@ -91,27 +98,38 @@ interface UserTelegramSession {
 
 const userSessions = new Map<number, UserTelegramSession>();
 
-if (telegramToken && telegramToken !== 'YOUR_TELEGRAM_BOT_TOKEN_HERE') {
+async function initOrRestartTelegramBot(rawToken?: string | null) {
+  const validToken = sanitizeBotToken(rawToken);
+  if (!validToken) {
+    console.log('⚠️ Yaroqli Telegram Bot Token mavjud emas.');
+    return;
+  }
+
+  if (telegramBot) {
+    try {
+      await telegramBot.stopPolling();
+    } catch (e) {
+      // ignore
+    }
+    telegramBot = null;
+  }
+
   try {
-    telegramBot = new TelegramBot(telegramToken, { polling: true });
-    telegramBot
-      .getMe()
-      .then((me) => {
-        botInfo = {
-          isActive: true,
-          botUsername: me.username,
-          botFirstName: me.first_name,
-        };
-        console.log(`🤖 Telegram Bot faol: @${me.username}`);
-      })
-      .catch((err) => {
-        console.error('Telegram Bot getMe xatosi:', err.message);
-      });
+    telegramToken = validToken;
+    telegramBot = new TelegramBot(validToken, { polling: true });
+    const me = await telegramBot.getMe();
+    botInfo = {
+      isActive: true,
+      botUsername: me.username,
+      botFirstName: me.first_name,
+    };
+    console.log(`🤖 Telegram Bot faollashtirildi: @${me.username}`);
 
     telegramBot.on('polling_error', (error) => {
       console.error('Telegram Polling xatosi:', error.message);
     });
 
+    // /start buyrug'i
     telegramBot.onText(/\/start/, (msg) => {
       const chatId = msg.chat.id;
       userSessions.set(chatId, { step: 'NONE' });
@@ -134,6 +152,7 @@ if (telegramToken && telegramToken !== 'YOUR_TELEGRAM_BOT_TOKEN_HERE') {
       });
     });
 
+    // Yangi murojaat yuborish
     telegramBot.onText(/📝 Yangi murojaat yuborish/, (msg) => {
       const chatId = msg.chat.id;
       userSessions.set(chatId, { step: 'SELECT_ORG' });
@@ -156,6 +175,7 @@ if (telegramToken && telegramToken !== 'YOUR_TELEGRAM_BOT_TOKEN_HERE') {
       );
     });
 
+    // Mening murojaatlarim
     telegramBot.onText(/📋 Mening murojaatlarim holati/, (msg) => {
       const chatId = msg.chat.id;
       const userAppeals = appeals.filter((a) => a.telegramChatId === chatId);
@@ -187,6 +207,7 @@ if (telegramToken && telegramToken !== 'YOUR_TELEGRAM_BOT_TOKEN_HERE') {
       telegramBot?.sendMessage(chatId, text, { parse_mode: 'HTML' });
     });
 
+    // Tashkilotlar ro'yxati
     telegramBot.onText(/🏢 Tashkilotlar ro'yxati/, (msg) => {
       const chatId = msg.chat.id;
       let text = `🏢 <b>Tizimga ulangan tashkilotlar:</b>\n\n`;
@@ -196,6 +217,7 @@ if (telegramToken && telegramToken !== 'YOUR_TELEGRAM_BOT_TOKEN_HERE') {
       telegramBot?.sendMessage(chatId, text, { parse_mode: 'HTML' });
     });
 
+    // Yordam
     telegramBot.onText(/ℹ️ Yordam/, (msg) => {
       const chatId = msg.chat.id;
       telegramBot?.sendMessage(
@@ -210,6 +232,7 @@ if (telegramToken && telegramToken !== 'YOUR_TELEGRAM_BOT_TOKEN_HERE') {
       );
     });
 
+    // Callback tugmalar
     telegramBot.on('callback_query', async (query) => {
       const chatId = query.message?.chat.id;
       if (!chatId || !query.data) return;
@@ -268,6 +291,7 @@ if (telegramToken && telegramToken !== 'YOUR_TELEGRAM_BOT_TOKEN_HERE') {
       }
     });
 
+    // Xabarlarni qabul qilish va ketma-ketlik
     telegramBot.on('message', async (msg) => {
       const chatId = msg.chat.id;
       const text = msg.text?.trim();
@@ -440,6 +464,9 @@ if (telegramToken && telegramToken !== 'YOUR_TELEGRAM_BOT_TOKEN_HERE') {
   }
 }
 
+initOrRestartTelegramBot(telegramToken);
+
+// Function to notify Telegram user when appeal is resolved
 async function notifyTelegramUserResolved(appeal: Appeal) {
   if (!telegramBot || !appeal.telegramChatId) return;
 
@@ -477,6 +504,8 @@ async function notifyTelegramUserResolved(appeal: Appeal) {
   }
 }
 
+// REST API Endpoints
+
 app.post('/api/auth/login', (req, res) => {
   const { password } = req.body;
   if (!password) {
@@ -493,6 +522,24 @@ app.post('/api/auth/login', (req, res) => {
   }
 
   return res.status(401).json({ success: false, message: 'Kiritilgan maxsus parol noto‘g‘ri!' });
+});
+
+app.post('/api/telegram/configure', async (req, res) => {
+  const { token } = req.body;
+  const valid = sanitizeBotToken(token);
+  if (!valid) {
+    return res.status(400).json({ success: false, error: 'Yaroqsiz Telegram bot token kiritildi' });
+  }
+  try {
+    await initOrRestartTelegramBot(valid);
+    if (botInfo.isActive) {
+      res.json({ success: true, bot: botInfo });
+    } else {
+      res.status(400).json({ success: false, error: 'Telegram botga ulanib bo‘lmadi. Tokenni tekshiring.' });
+    }
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message || 'Botni ulashda xatolik' });
+  }
 });
 
 app.get('/api/organizations', (req, res) => {
