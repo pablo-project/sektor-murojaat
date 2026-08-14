@@ -5,9 +5,11 @@ export const App: React.FC = () => {
   const [appeals, setAppeals] = useState<Appeal[]>([]);
   const [userRole, setUserRole] = useState<'admin' | 'superadmin'>('admin');
 
+  // Murojaatlarni yuklash
   const fetchAppeals = async () => {
     try {
-      const res = await fetch('https://sektor-murojaat.onrender.com/api/appeals');
+      // Domain o'zgarsa ham to'g'ri ishlashi uchun nisbiy URL: /api/appeals
+      const res = await fetch('/api/appeals');
       if (res.ok) {
         const data = await res.json();
         setAppeals(data);
@@ -19,7 +21,8 @@ export const App: React.FC = () => {
 
   useEffect(() => {
     fetchAppeals();
-    const interval = setInterval(fetchAppeals, 5000);
+    // Real-time: Har 3 soniyada yangi xabarlarni tekshirib turadi
+    const interval = setInterval(fetchAppeals, 3000);
     return () => clearInterval(interval);
   }, []);
 
@@ -61,8 +64,9 @@ export const App: React.FC = () => {
           <div className="p-6 bg-white shadow rounded-lg space-y-4">
             <div className="flex justify-between items-center border-b pb-4">
               <h2 className="text-xl font-bold text-gray-800">Kelib Tushgan Murojaatlar Dashbordi</h2>
-              <span className="text-xs font-semibold text-green-600 bg-green-50 px-2 py-1 rounded">
-                ⚡ Avto-yangilanish: 5s
+              <span className="text-xs font-semibold text-green-600 bg-green-50 px-2 py-1 rounded flex items-center gap-1">
+                <span className="w-2 h-2 bg-green-500 rounded-full animate-ping"></span>
+                Jonli yangilanish (3s)
               </span>
             </div>
 
@@ -100,7 +104,7 @@ export const App: React.FC = () => {
               {appeals.length === 0 && (
                 <div className="text-center py-12 text-gray-400">
                   <p className="text-lg font-medium">Hozircha hech qanday murojaat yo'q</p>
-                  <p className="text-sm">Telegram bot orqali xabar yuborsangiz, shu yerda avtomatik paydo bo'ladi.</p>
+                  <p className="text-sm">Telegram botingizga biron matn yuborib tekshirib ko'ring, shu yerda zudlik bilan paydo bo'ladi!</p>
                 </div>
               )}
             </div>

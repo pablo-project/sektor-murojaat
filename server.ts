@@ -11,9 +11,10 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 3001;
 
-// FRONTEND FAYLLARINI TARQATISH (Cannot GET / muammosini hal qiladi)
+// React frontend fayllarini tarqatish
 app.use(express.static(path.join(__dirname, '../dist')));
 
+// Vaqtinchalik ma'lumotlar ombori
 let appeals: any[] = [];
 let organizations = [
   { id: '1', name: 'Toshkent Shahar Hokimligi', pendingCount: 0, completedCount: 0 },
@@ -34,9 +35,10 @@ let bot: any = null;
 if (botToken) {
   try {
     bot = new TelegramBot(botToken, { polling: true });
-    console.log('Telegram Bot muvaffaqiyatli ishga tushdi!');
+    console.log('✅ Telegram Bot muvaffaqiyatli ishga tushdi!');
 
     bot.on('message', (msg: any) => {
+      // Buyruq bo'lmagan oddiy matnli murojaatlarni ushlaymiz
       if (msg.text && !msg.text.startsWith('/')) {
         const newAppeal = {
           id: Date.now().toString(),
@@ -49,7 +51,8 @@ if (botToken) {
           aiResponse: ''
         };
 
-        appeals.push(newAppeal);
+        appeals.unshift(newAppeal); // Yangi murojaatni eng tepaga qo'shamiz
+        console.log('📥 Yangi murojaat dashbord uchun saqlandi:', newAppeal);
 
         bot.sendMessage(
           msg.chat.id,
@@ -58,7 +61,7 @@ if (botToken) {
       } else if (msg.text === '/start') {
         bot.sendMessage(
           msg.chat.id,
-          `Assalomu alaykum, ${msg.from?.first_name || 'fuqaro'}!\n\nMurojaatingizni yuboring, u avtomatik ravishda boshqaruv paneliga (Dashbord) yo'naltiriladi.`
+          `Assalomu alaykum, ${msg.from?.first_name || 'fuqaro'}!\n\nMurojaatingizni yuboring, u avtomatik ravishda boshqaruv paneliga yo'naltiriladi.`
         );
       }
     });
@@ -85,11 +88,11 @@ if (botToken) {
       }
     });
   } catch (err) {
-    console.error('Telegram botni ishga tushirishda xatolik:', err);
+    console.error('❌ Telegram botni ishga tushirishda xatolik:', err);
   }
 }
 
-// REST API
+// REST API Endpoints
 app.get('/api/appeals', (req, res) => {
   res.json(appeals);
 });
@@ -105,7 +108,7 @@ app.post('/api/appeals', (req, res) => {
     createdAt: new Date().toISOString(),
     aiResponse: ''
   };
-  appeals.push(newAppeal);
+  appeals.unshift(newAppeal);
   res.status(201).json(newAppeal);
 });
 
@@ -155,7 +158,7 @@ app.post('/api/ai/generate-response', async (req, res) => {
   }
 });
 
-// HAR QANDAY SO'ROVDA FRONTEND IShGA TUSHIShI UChUN
+// Barcha boshqa yo'llarda React index.html faylini berish
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, '../dist/index.html'));
 });
