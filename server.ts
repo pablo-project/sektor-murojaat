@@ -1,7 +1,9 @@
 import express from 'express';
 import cors from 'cors';
 import { GoogleGenAI } from '@google/genai';
-import TelegramBot = require('node-telegram-bot-api');
+
+// CommonJS import sintaksisi - Render Node runtime'ida muammosiz ishlaydi
+const TelegramBot = require('node-telegram-bot-api');
 
 const app = express();
 app.use(cors());
@@ -9,18 +11,21 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 3001;
 
+// Xotiradagi ma'lumotlar
 let appeals: any[] = [];
 let organizations = [
   { id: '1', name: 'Toshkent Shahar Hokimligi', pendingCount: 0, completedCount: 0 },
   { id: '2', name: 'Sogʻliqni Saqlash Vazirligi', pendingCount: 0, completedCount: 0 }
 ];
 
+// Gemini AI
 const aiApiKey = process.env.GEMINI_API_KEY;
 let aiClient: GoogleGenAI | null = null;
 if (aiApiKey) {
   aiClient = new GoogleGenAI({ apiKey: aiApiKey });
 }
 
+// Telegram Bot
 const botToken = process.env.TELEGRAM_BOT_TOKEN;
 let bot: any = null;
 
@@ -43,6 +48,7 @@ if (botToken) {
         };
 
         appeals.push(newAppeal);
+        console.log('Yangi murojaat saqlandi:', newAppeal);
 
         bot.sendMessage(
           msg.chat.id,
