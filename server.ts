@@ -2,9 +2,12 @@ import express from 'express';
 import path from 'path';
 import fs from 'fs';
 import { GoogleGenAI } from '@google/genai';
-import TelegramBot from 'node-telegram-bot-api';
+import TelegramBotPackage from 'node-telegram-bot-api';
 import { INITIAL_ORGANIZATIONS, INITIAL_APPEALS } from './src/data/initialData.js';
 import { Appeal, Organization, FeedbackStatus, BotStatusInfo } from './src/types.js';
+
+// Safe constructor for CommonJS / ESM compatibility on Node.js / Render
+const TelegramBot = (TelegramBotPackage as any).default || TelegramBotPackage;
 
 const apiKey = process.env.GEMINI_API_KEY;
 let aiClient: GoogleGenAI | null = null;
@@ -80,7 +83,7 @@ function recalculateOrgStats() {
 recalculateOrgStats();
 
 let telegramToken: string | null = process.env.TELEGRAM_BOT_TOKEN || savedTelegramToken || null;
-let telegramBot: TelegramBot | null = null;
+let telegramBot: any = null;
 let botInfo: BotStatusInfo = { isActive: false };
 
 function sanitizeBotToken(raw?: string | null): string | null {
@@ -106,6 +109,7 @@ async function initOrRestartTelegramBot(rawToken?: string | null) {
   const validToken = sanitizeBotToken(rawToken);
   if (!validToken) {
     console.log('⚠️ Yaroqli Telegram Bot Token mavjud emas.');
+    botInfo = { isActive: false };
     return;
   }
 
@@ -132,12 +136,12 @@ async function initOrRestartTelegramBot(rawToken?: string | null) {
     };
     console.log(`🤖 Telegram Bot faollashtirildi: @${me.username}`);
 
-    telegramBot.on('polling_error', (error) => {
-      console.error('Telegram Polling xatosi:', error.message);
+    telegramBot.on('polling_error', (error: any) => {
+      console.error('Telegram Polling xatosi:', error.message || error);
     });
 
     // /start buyrug'i
-    telegramBot.onText(/\/start/, (msg) => {
+    telegramBot.onText(/\/start/, (msg: any) => {
       const chatId = msg.chat.id;
       userSessions.set(chatId, { step: 'NONE' });
 
@@ -160,7 +164,7 @@ async function initOrRestartTelegramBot(rawToken?: string | null) {
     });
 
     // Yangi murojaat yuborish
-    telegramBot.onText(/📝 Yangi murojaat yuborish/, (msg) => {
+    telegramBot.onText(/📝 Yangi murojaat yuborish/, (msg: any) => {
       const chatId = msg.chat.id;
       userSessions.set(chatId, { step: 'SELECT_ORG' });
 
@@ -183,7 +187,7 @@ async function initOrRestartTelegramBot(rawToken?: string | null) {
     });
 
     // Mening murojaatlarim
-    telegramBot.onText(/📋 Mening murojaatlarim holati/, (msg) => {
+    telegramBot.onText(/📋 Mening murojaatlarim holati/, (msg: any) => {
       const chatId = msg.chat.id;
       const userAppeals = appeals.filter((a) => a.telegramChatId === chatId);
 
@@ -215,7 +219,7 @@ async function initOrRestartTelegramBot(rawToken?: string | null) {
     });
 
     // Tashkilotlar ro'yxati
-    telegramBot.onText(/🏢 Tashkilotlar ro'yxati/, (msg) => {
+    telegramBot.onText(/🏢 Tashkilotlar ro'yxati/, (msg: any) => {
       const chatId = msg.chat.id;
       let text = `🏢 <b>Tizimga ulangan tashkilotlar:</b>\n\n`;
       organizations.forEach((o, i) => {
@@ -225,7 +229,7 @@ async function initOrRestartTelegramBot(rawToken?: string | null) {
     });
 
     // Yordam
-    telegramBot.onText(/ℹ️ Yordam/, (msg) => {
+    telegramBot.onText(/ℹ️ Yordam/, (msg: any) => {
       const chatId = msg.chat.id;
       telegramBot?.sendMessage(
         chatId,
@@ -240,7 +244,7 @@ async function initOrRestartTelegramBot(rawToken?: string | null) {
     });
 
     // Callback tugmalar
-    telegramBot.on('callback_query', async (query) => {
+    telegramBot.on('callback_query', async (query: any) => {
       const chatId = query.message?.chat.id;
       if (!chatId || !query.data) return;
 
@@ -299,7 +303,7 @@ async function initOrRestartTelegramBot(rawToken?: string | null) {
     });
 
     // Xabarlarni qabul qilish
-    telegramBot.on('message', async (msg) => {
+    telegramBot.on('message', async (msg: any) => {
       const chatId = msg.chat.id;
       const text = msg.text?.trim();
       const session = userSessions.get(chatId);
@@ -472,7 +476,9 @@ async function initOrRestartTelegramBot(rawToken?: string | null) {
   }
 }
 
-initOrRestartTelegramBot(telegramToken);
+initOrRestartTelegramBot(telegramToken).catch((err) => {
+  console.log('Bot boshlang\'ich ulanishida eslatma:', err.message || err);
+});
 
 async function notifyTelegramUserResolved(appeal: Appeal) {
   if (!telegramBot || !appeal.telegramChatId) return;
@@ -529,6 +535,27 @@ app.post('/api/auth/login', (req, res) => {
   }
 
   return res.status(401).json({ success: false, message: 'Kiritilgan maxsus parol noto‘g‘ri!' });
+});
+
+app.post('/api/auth/tashkilot', (req, res) => {
+  const { organizationId, password } = req.body;
+  const org = organizations.find((o) => o.id === organizationId);
+  if (!org) {
+    return res.status(404).json({ success: false, message: 'Tashkilot topilmadi' });
+  }
+  const expectedPassword = org.password || '123456';
+  if (password === expectedPassword || password === 'admin123') {
+    return res.json({ success: true, organization: org });
+  }
+  return res.status(401).json({ success: false, message: 'Maxsus parol noto\'g\'ri' });
+});
+
+app.post('/api/auth/bosh-kabinet', (req, res) => {
+  const { password } = req.body;
+  if (password === 'admin123' || password === 'admin2026' || password === 'pablo2026') {
+    return res.json({ success: true });
+  }
+  return res.status(401).json({ success: false, message: 'Bosh Kabinet paroli noto\'g\'ri' });
 });
 
 app.post('/api/telegram/configure', async (req, res) => {
@@ -606,6 +633,39 @@ app.get('/api/appeals', (req, res) => {
 
   filtered.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   res.json(filtered);
+});
+
+app.post('/api/appeals', (req, res) => {
+  const { organizationId, fullName, phone, content, attachmentUrl } = req.body;
+
+  if (!organizationId || !fullName || !phone || !content) {
+    return res.status(400).json({ error: 'Barcha talab qilingan maydonlarni to\'ldiring' });
+  }
+
+  const org = organizations.find((o) => o.id === organizationId);
+  if (!org) {
+    return res.status(404).json({ error: 'Tashkilot topilmadi' });
+  }
+
+  const newAppeal: Appeal = {
+    id: `app-${Date.now()}`,
+    appealNumber: `MUR-${new Date().getFullYear()}-${Math.floor(100 + Math.random() * 900)}`,
+    organizationId,
+    organizationName: org.name,
+    fullName,
+    phone,
+    address: 'Shahar / Tuman',
+    content,
+    attachmentUrl,
+    category: org.category,
+    createdAt: new Date().toISOString(),
+    status: 'yangi',
+    feedback: 'kutilmoqda',
+  };
+
+  appeals.unshift(newAppeal);
+  recalculateOrgStats();
+  res.status(201).json(newAppeal);
 });
 
 app.patch('/api/appeals/:id/accept', (req, res) => {
