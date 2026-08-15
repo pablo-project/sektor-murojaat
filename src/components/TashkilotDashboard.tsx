@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Building2, CheckCircle2, Clock, AlertCircle, Sparkles, Send, User, Phone, Calendar, ArrowRight, ShieldAlert, Image, Search, Filter, RefreshCw, AlertTriangle } from 'lucide-react';
+import React, { useState, useRef } from 'react';
+import { Building2, CheckCircle2, Clock, AlertCircle, Sparkles, Send, User, Phone, Calendar, ArrowRight, ShieldAlert, Image, Search, Filter, RefreshCw, AlertTriangle, Upload, Trash2 } from 'lucide-react';
 import { Organization, Appeal } from '../types';
 
 interface TashkilotDashboardProps {
@@ -29,9 +29,11 @@ export const TashkilotDashboard: React.FC<TashkilotDashboardProps> = ({
   const [operatorName, setOperatorName] = useState('Inspektor B. Qodirov');
   const [resolutionText, setResolutionText] = useState('');
   const [resolutionPhotoUrl, setResolutionPhotoUrl] = useState('https://images.unsplash.com/photo-1450133064473-71024230f91b?auto=format&fit=crop&w=600&q=80');
+  const [photoFileName, setPhotoFileName] = useState('');
   const [rejectReason, setRejectReason] = useState('');
   const [isGeneratingAi, setIsGeneratingAi] = useState(false);
   const [showRejectForm, setShowRejectForm] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   // Filter appeals for this organization
   const orgAppeals = appeals.filter((a) => a.organizationId === organization.id);
@@ -58,7 +60,33 @@ export const TashkilotDashboard: React.FC<TashkilotDashboardProps> = ({
     setSelectedAppeal(appeal);
     setResolutionText(appeal.resolutionText || '');
     setResolutionPhotoUrl(appeal.resolutionPhotoUrl || 'https://images.unsplash.com/photo-1450133064473-71024230f91b?auto=format&fit=crop&w=600&q=80');
+    setPhotoFileName('');
     setShowRejectForm(false);
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (file.size > 10 * 1024 * 1024) {
+      alert('Rasm hajmi 10MB dan oshmasligi kerak');
+      return;
+    }
+
+    setPhotoFileName(file.name);
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      setResolutionPhotoUrl(reader.result as string);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleRemovePhoto = () => {
+    setResolutionPhotoUrl('');
+    setPhotoFileName('');
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
   };
 
   const handleAccept = async () => {
@@ -119,13 +147,6 @@ export const TashkilotDashboard: React.FC<TashkilotDashboardProps> = ({
       className: hours < 4 ? 'bg-amber-100 text-amber-900 border-amber-300 font-bold' : 'bg-indigo-50 text-indigo-700 border-indigo-200 font-bold',
     };
   };
-
-  // Sample photo proof presets
-  const samplePhotoPresets = [
-    { label: 'Hujjat va Bayonnoma', url: 'https://images.unsplash.com/photo-1450133064473-71024230f91b?auto=format&fit=crop&w=600&q=80' },
-    { label: 'O\'rganish va Xatlov', url: 'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?auto=format&fit=crop&w=600&q=80' },
-    { label: 'Obodonlashtirish va Yoritish', url: 'https://images.unsplash.com/photo-1513694203232-719a280e022f?auto=format&fit=crop&w=600&q=80' },
-  ];
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
@@ -505,6 +526,15 @@ export const TashkilotDashboard: React.FC<TashkilotDashboardProps> = ({
                     <CheckCircle2 className="w-4 h-4 text-emerald-600" />
                     <span>Tashkilot Ijro Hulosasi va Ish Natijasi *</span>
                   </label>
+                  <button
+                    type="button"
+                    onClick={handleGenerateAi}
+                    disabled={isGeneratingAi}
+                    className="inline-flex items-center space-x-1.5 text-xs font-bold text-indigo-600 bg-indigo-50 hover:bg-indigo-100 px-3 py-1 rounded-lg transition-colors border border-indigo-200"
+                  >
+                    <Sparkles className="w-3.5 h-3.5" />
+                    <span>{isGeneratingAi ? 'AI yozmoqda...' : 'AI bilan yozish'}</span>
+                  </button>
                 </div>
 
                 <textarea
@@ -516,44 +546,73 @@ export const TashkilotDashboard: React.FC<TashkilotDashboardProps> = ({
                   className="w-full text-xs p-3.5 border border-slate-300 rounded-2xl focus:ring-2 focus:ring-indigo-500 bg-white"
                 />
 
-                {/* Photo Proof Upload/Selection */}
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                    📷 Bajarilgan ish foto-isboti (Rasm URL):
-                  </label>
-                  <input
-                    type="url"
-                    value={resolutionPhotoUrl}
-                    onChange={(e) => setResolutionPhotoUrl(e.target.value)}
-                    className="w-full text-xs p-2.5 border border-slate-300 rounded-xl bg-white mb-2"
-                  />
-                  
-                  {/* Photo Presets */}
-                  <div className="flex items-center space-x-2">
-                    <span className="text-[10px] font-bold text-slate-400">Namuna rasmlar:</span>
-                    {samplePhotoPresets.map((preset, idx) => (
+                {/* Photo Proof Upload from Computer Device */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-bold text-slate-700 flex items-center space-x-1.5">
+                      <Image className="w-4 h-4 text-indigo-600" />
+                      <span>📷 Bajarilgan ish foto-isboti (Kompyuterdan yuklash):</span>
+                    </label>
+                    {resolutionPhotoUrl && (
                       <button
-                        key={idx}
                         type="button"
-                        onClick={() => setResolutionPhotoUrl(preset.url)}
-                        className="text-[10px] bg-slate-100 hover:bg-indigo-100 hover:text-indigo-700 text-slate-600 font-medium px-2 py-1 rounded-lg border border-slate-200"
+                        onClick={handleRemovePhoto}
+                        className="text-xs text-rose-600 hover:text-rose-700 flex items-center space-x-1 font-semibold"
                       >
-                        {preset.label}
+                        <Trash2 className="w-3 h-3" />
+                        <span>Rasmni o'chirish</span>
                       </button>
-                    ))}
+                    )}
                   </div>
-                </div>
 
-                {resolutionPhotoUrl && (
-                  <div>
-                    <span className="text-[10px] font-bold text-slate-400 block mb-1">Rasm Ko'rinishi:</span>
-                    <img
-                      src={resolutionPhotoUrl}
-                      alt="Proof"
-                      className="w-full max-h-40 object-cover rounded-xl border border-slate-200"
-                    />
-                  </div>
-                )}
+                  <input
+                    type="file"
+                    ref={fileInputRef}
+                    accept="image/*"
+                    onChange={handleFileChange}
+                    className="hidden"
+                    id="tashkilot-photo-upload"
+                  />
+
+                  {!resolutionPhotoUrl ? (
+                    <label
+                      htmlFor="tashkilot-photo-upload"
+                      className="flex flex-col items-center justify-center border-2 border-dashed border-slate-300 hover:border-indigo-500 bg-slate-50 hover:bg-indigo-50/40 rounded-2xl p-4 cursor-pointer transition-all"
+                    >
+                      <Upload className="w-6 h-6 text-indigo-600 mb-1" />
+                      <span className="text-xs font-bold text-slate-700">Kompyuterdan foto-hisobot rasmini tanlang</span>
+                      <span className="text-[10px] text-slate-500 mt-0.5">PNG, JPG, JPEG (Maksimal 10MB)</span>
+                    </label>
+                  ) : (
+                    <div className="relative rounded-2xl overflow-hidden border border-slate-200 max-h-48 bg-slate-100 flex items-center justify-center group">
+                      <img
+                        src={resolutionPhotoUrl}
+                        alt="Hisobot rasmi"
+                        className="w-full max-h-48 object-cover rounded-xl"
+                      />
+                      <div className="absolute inset-0 bg-slate-900/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center space-x-2">
+                        <label
+                          htmlFor="tashkilot-photo-upload"
+                          className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-lg cursor-pointer shadow"
+                        >
+                          Boshqa rasm tanlash
+                        </label>
+                        <button
+                          type="button"
+                          onClick={handleRemovePhoto}
+                          className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold rounded-lg shadow"
+                        >
+                          O'chirish
+                        </button>
+                      </div>
+                      {photoFileName && (
+                        <div className="absolute bottom-2 left-2 bg-white/95 px-2.5 py-1 rounded-md text-[11px] font-bold text-slate-800 shadow border border-slate-200">
+                          📷 {photoFileName}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
 
                 {/* Submit Resolution */}
                 <div className="pt-3 flex items-center justify-between border-t border-slate-200">
