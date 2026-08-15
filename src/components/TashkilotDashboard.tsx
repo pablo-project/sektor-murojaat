@@ -26,7 +26,7 @@ export const TashkilotDashboard: React.FC<TashkilotDashboardProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
 
   // Operator modal state
-  const [operatorName, setOperatorName] = useState('Inspektor B. Qodirov');
+  const [operatorName, setOperatorName] = useState('Xodim: D.Rajabov');
   const [resolutionText, setResolutionText] = useState('');
   const [resolutionPhotoUrl, setResolutionPhotoUrl] = useState('');
   const [photoFileName, setPhotoFileName] = useState('');

@@ -358,7 +358,7 @@ async function initOrRestartTelegramBot(rawToken?: string | null) {
 
           await telegramBot?.sendMessage(
             chatId,
-            `Yashash <b>manzilingizni</b> kiriting (masalan: Bog'ot MFY, Mustaqillik ko'chasi 12-uy):`,
+            `Yashash <b>manzilingizni</b> kiriting (masalan: Bog'oloni MFY, Mustaqillik ko'chasi 12-uy):`,
             {
               parse_mode: 'HTML',
               reply_markup: {
