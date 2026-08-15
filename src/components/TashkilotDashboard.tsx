@@ -28,10 +28,11 @@ export const TashkilotDashboard: React.FC<TashkilotDashboardProps> = ({
   // Operator modal state
   const [operatorName, setOperatorName] = useState('Inspektor B. Qodirov');
   const [resolutionText, setResolutionText] = useState('');
-  const [resolutionPhotoUrl, setResolutionPhotoUrl] = useState('https://images.unsplash.com/photo-1450133064473-71024230f91b?auto=format&fit=crop&w=600&q=80');
+  const [resolutionPhotoUrl, setResolutionPhotoUrl] = useState('');
   const [photoFileName, setPhotoFileName] = useState('');
   const [rejectReason, setRejectReason] = useState('');
   const [isGeneratingAi, setIsGeneratingAi] = useState(false);
+  const [isSendingResolve, setIsSendingResolve] = useState(false);
   const [showRejectForm, setShowRejectForm] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -59,7 +60,7 @@ export const TashkilotDashboard: React.FC<TashkilotDashboardProps> = ({
   const handleOpenDetail = (appeal: Appeal) => {
     setSelectedAppeal(appeal);
     setResolutionText(appeal.resolutionText || '');
-    setResolutionPhotoUrl(appeal.resolutionPhotoUrl || 'https://images.unsplash.com/photo-1450133064473-71024230f91b?auto=format&fit=crop&w=600&q=80');
+    setResolutionPhotoUrl(appeal.resolutionPhotoUrl || '');
     setPhotoFileName('');
     setShowRejectForm(false);
   };
@@ -106,8 +107,16 @@ export const TashkilotDashboard: React.FC<TashkilotDashboardProps> = ({
     e.preventDefault();
     if (!selectedAppeal || !resolutionText.trim()) return;
 
-    await onResolveAppeal(selectedAppeal.id, resolutionText, resolutionPhotoUrl);
-    setSelectedAppeal(null);
+    setIsSendingResolve(true);
+    try {
+      await onResolveAppeal(selectedAppeal.id, resolutionText, resolutionPhotoUrl);
+      alert('✅ Murojaat muvaffaqiyatli hal qilindi va fuqaroga javob yuborildi!');
+      setSelectedAppeal(null);
+    } catch (err: any) {
+      alert('Xatolik: ' + (err.message || 'Murojaatni hal qilishda xatolik'));
+    } finally {
+      setIsSendingResolve(false);
+    }
   };
 
   const handleGenerateAi = async () => {
@@ -623,10 +632,11 @@ export const TashkilotDashboard: React.FC<TashkilotDashboardProps> = ({
                   <button
                     id="btn-tashkilot-submit-resolve"
                     type="submit"
-                    className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs py-2.5 px-5 rounded-xl shadow flex items-center space-x-2"
+                    disabled={isSendingResolve || !resolutionText.trim()}
+                    className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-bold text-xs py-2.5 px-5 rounded-xl shadow flex items-center space-x-2 transition-all cursor-pointer disabled:cursor-not-allowed"
                   >
                     <Send className="w-3.5 h-3.5" />
-                    <span>Yuborish va Hal qilish (Botga Natija Ketadi)</span>
+                    <span>{isSendingResolve ? 'Yuborilmoqda...' : 'Yuborish va Hal qilish (Botga Natija Ketadi)'}</span>
                   </button>
                 </div>
 

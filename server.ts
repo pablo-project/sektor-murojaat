@@ -19,7 +19,8 @@ if (apiKey) {
 }
 
 const app = express();
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 const STORAGE_FILE = path.join(process.cwd(), 'data-storage.json');
 
@@ -116,31 +117,44 @@ async function initOrRestartTelegramBot(rawToken?: string | null) {
   if (telegramBot) {
     try {
       await telegramBot.stopPolling();
-    } catch (e) {
-      // ignore
-    }
+    } catch (e) {}
     telegramBot = null;
   }
 
   try {
     telegramToken = validToken;
     savedTelegramToken = validToken;
-    savePersistedData();
 
-    telegramBot = new TelegramBot(validToken, { polling: true });
-    const me = await telegramBot.getMe();
+    const candidateBot = new TelegramBot(validToken, { polling: false });
+    const me = await candidateBot.getMe();
+    
+    savePersistedData();
+    telegramBot = candidateBot;
     botInfo = {
       isActive: true,
       botUsername: me.username,
       botFirstName: me.first_name,
     };
-    console.log(`🤖 Telegram Bot faollashtirildi: @${me.username}`);
+    console.log(`🤖 Telegram Bot muvaffaqiyatli ulandi: @${me.username}`);
+
+    await telegramBot.startPolling();
 
     telegramBot.on('polling_error', (error: any) => {
-      console.error('Telegram Polling xatosi:', error.message || error);
+      const errText = error?.message || error?.toString() || '';
+      if (errText.includes('401') || errText.includes('Unauthorized') || error?.code === 'ETELEGRAM') {
+        console.warn('⚠️ Telegram bot token yaroqsiz (401). Polling to‘xtatildi.');
+        try {
+          telegramBot?.stopPolling();
+        } catch (_) {}
+        botInfo = { isActive: false };
+        telegramBot = null;
+        savedTelegramToken = null;
+        savePersistedData();
+      } else {
+        console.error('Telegram Polling xatosi:', errText);
+      }
     });
 
-    // /start buyrug'i
     telegramBot.onText(/\/start/, (msg: any) => {
       const chatId = msg.chat.id;
       userSessions.set(chatId, { step: 'NONE' });
@@ -163,7 +177,6 @@ async function initOrRestartTelegramBot(rawToken?: string | null) {
       });
     });
 
-    // Yangi murojaat yuborish
     telegramBot.onText(/📝 Yangi murojaat yuborish/, (msg: any) => {
       const chatId = msg.chat.id;
       userSessions.set(chatId, { step: 'SELECT_ORG' });
@@ -186,7 +199,6 @@ async function initOrRestartTelegramBot(rawToken?: string | null) {
       );
     });
 
-    // Mening murojaatlarim
     telegramBot.onText(/📋 Mening murojaatlarim holati/, (msg: any) => {
       const chatId = msg.chat.id;
       const userAppeals = appeals.filter((a) => a.telegramChatId === chatId);
@@ -218,7 +230,6 @@ async function initOrRestartTelegramBot(rawToken?: string | null) {
       telegramBot?.sendMessage(chatId, text, { parse_mode: 'HTML' });
     });
 
-    // Tashkilotlar ro'yxati
     telegramBot.onText(/🏢 Tashkilotlar ro'yxati/, (msg: any) => {
       const chatId = msg.chat.id;
       let text = `🏢 <b>Tizimga ulangan tashkilotlar:</b>\n\n`;
@@ -228,7 +239,6 @@ async function initOrRestartTelegramBot(rawToken?: string | null) {
       telegramBot?.sendMessage(chatId, text, { parse_mode: 'HTML' });
     });
 
-    // Yordam
     telegramBot.onText(/ℹ️ Yordam/, (msg: any) => {
       const chatId = msg.chat.id;
       telegramBot?.sendMessage(
@@ -243,7 +253,6 @@ async function initOrRestartTelegramBot(rawToken?: string | null) {
       );
     });
 
-    // Callback tugmalar
     telegramBot.on('callback_query', async (query: any) => {
       const chatId = query.message?.chat.id;
       if (!chatId || !query.data) return;
@@ -302,7 +311,6 @@ async function initOrRestartTelegramBot(rawToken?: string | null) {
       }
     });
 
-    // Xabarlarni qabul qilish
     telegramBot.on('message', async (msg: any) => {
       const chatId = msg.chat.id;
       const text = msg.text?.trim();
@@ -471,8 +479,16 @@ async function initOrRestartTelegramBot(rawToken?: string | null) {
       }
     });
   } catch (err: any) {
-    console.error('Telegram Botni boshlashda xatolik:', err.message);
-    throw err;
+    console.warn('⚠️ Telegram Bot ulanishida xatolik:', err.message || err);
+    if (telegramBot) {
+      try {
+        await telegramBot.stopPolling();
+      } catch (_) {}
+      telegramBot = null;
+    }
+    botInfo = { isActive: false };
+    savedTelegramToken = null;
+    savePersistedData();
   }
 }
 
@@ -500,12 +516,57 @@ async function notifyTelegramUserResolved(appeal: Appeal) {
   };
 
   try {
+    console.log(`📤 Telegramga javob yuborilmoqda: ChatID=${appeal.telegramChatId}, Murojaat=${appeal.appealNumber}`);
+    
     if (appeal.resolutionPhotoUrl) {
-      await telegramBot.sendPhoto(appeal.telegramChatId, appeal.resolutionPhotoUrl, {
-        caption: text,
-        parse_mode: 'HTML',
-        reply_markup: inlineKeyboard,
-      });
+      if (appeal.resolutionPhotoUrl.startsWith('data:image/')) {
+        const matches = appeal.resolutionPhotoUrl.match(/^data:image\/([a-zA-Z0-9]+);base64,(.+)$/);
+        const ext = matches ? matches[1] : 'jpeg';
+        const base64Data = matches ? matches[2] : appeal.resolutionPhotoUrl.replace(/^data:image\/\w+;base64,/, '');
+        const photoBuffer = Buffer.from(base64Data, 'base64');
+        
+        try {
+          await telegramBot.sendPhoto(
+            appeal.telegramChatId,
+            photoBuffer,
+            {
+              caption: text,
+              parse_mode: 'HTML',
+              reply_markup: inlineKeyboard,
+            },
+            {
+              filename: `hisobot.${ext === 'png' ? 'png' : 'jpg'}`,
+              contentType: `image/${ext}`,
+            }
+          );
+          console.log(`✅ Base64 rasm bilan Telegramga muvaffaqiyatli yuborildi!`);
+          return;
+        } catch (photoErr: any) {
+          console.warn('⚠️ Base64 rasm yuborishda xato, matn yuboriladi:', photoErr.message);
+          await telegramBot.sendMessage(appeal.telegramChatId, text, {
+            parse_mode: 'HTML',
+            reply_markup: inlineKeyboard,
+          });
+          return;
+        }
+      }
+
+      try {
+        await telegramBot.sendPhoto(appeal.telegramChatId, appeal.resolutionPhotoUrl, {
+          caption: text,
+          parse_mode: 'HTML',
+          reply_markup: inlineKeyboard,
+        });
+        console.log(`✅ URL rasm bilan Telegramga muvaffaqiyatli yuborildi!`);
+        return;
+      } catch (photoUrlErr: any) {
+        console.warn('⚠️ URL rasm yuborishda xato, matn yuboriladi:', photoUrlErr.message);
+        await telegramBot.sendMessage(appeal.telegramChatId, text, {
+          parse_mode: 'HTML',
+          reply_markup: inlineKeyboard,
+        });
+        return;
+      }
     } else {
       await telegramBot.sendMessage(appeal.telegramChatId, text, {
         parse_mode: 'HTML',
@@ -513,7 +574,7 @@ async function notifyTelegramUserResolved(appeal: Appeal) {
       });
     }
   } catch (err: any) {
-    console.error('Telegram notification yuborishda xato:', err.message);
+    console.error('Telegram notification yuborishda umumiy xato:', err.message);
   }
 }
 
@@ -605,6 +666,41 @@ app.post('/api/organizations', (req, res) => {
   organizations.push(newOrg);
   recalculateOrgStats();
   res.status(201).json(newOrg);
+});
+
+app.put('/api/organizations/:id', (req, res) => {
+  const { id } = req.params;
+  const { name, code, category, phone, leader, password } = req.body;
+
+  const orgIndex = organizations.findIndex((o) => o.id === id);
+  if (orgIndex === -1) {
+    return res.status(404).json({ error: 'Tashkilot topilmadi' });
+  }
+
+  organizations[orgIndex] = {
+    ...organizations[orgIndex],
+    name: name ?? organizations[orgIndex].name,
+    code: code ?? organizations[orgIndex].code,
+    category: category ?? organizations[orgIndex].category,
+    phone: phone ?? organizations[orgIndex].phone,
+    leader: leader ?? organizations[orgIndex].leader,
+    password: password ?? organizations[orgIndex].password,
+  };
+
+  recalculateOrgStats();
+  res.json(organizations[orgIndex]);
+});
+
+app.delete('/api/organizations/:id', (req, res) => {
+  const { id } = req.params;
+  const orgIndex = organizations.findIndex((o) => o.id === id);
+  if (orgIndex === -1) {
+    return res.status(404).json({ error: 'Tashkilot topilmadi' });
+  }
+
+  const deleted = organizations.splice(orgIndex, 1)[0];
+  recalculateOrgStats();
+  res.json({ success: true, deleted });
 });
 
 app.get('/api/appeals', (req, res) => {
@@ -716,7 +812,7 @@ app.patch('/api/appeals/:id/resolve', async (req, res) => {
 
   appeal.status = 'hal_etildi';
   appeal.resolutionText = resolutionText;
-  appeal.resolutionPhotoUrl = resolutionPhotoUrl || 'https://images.unsplash.com/photo-1450133064473-71024230f91b?auto=format&fit=crop&w=600&q=80';
+  appeal.resolutionPhotoUrl = resolutionPhotoUrl || '';
   appeal.resolvedAt = new Date().toISOString();
   appeal.feedback = 'kutilmoqda';
 
