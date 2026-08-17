@@ -586,7 +586,7 @@ app.post('/api/auth/login', (req, res) => {
     return res.status(400).json({ success: false, message: 'Parol kiritilmadi' });
   }
 
-  if (password === 'dlk1596357' || password === 'admin2026' || password === 'pablo2026') {
+  if (password === 'admin123' || password === 'admin2026' || password === 'pablo2026') {
     return res.json({ success: true, role: 'bosh_kabinet' });
   }
 
